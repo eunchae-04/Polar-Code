@@ -166,12 +166,12 @@ void polar_sc_decode_recursive(const double *llr, const int *info_mask, int *u_h
     
     // 3. 상위 계층 코드로의 병합 및 반환
     for (int i = 0; i < n2; i++) {
-        u_hat[i] = u_hat_left[i];                  
+        u_hat[i] = u_hat_left[i] ^ u_hat_right[i]; // 소스 비트 대칭 복원 (XOR)
         u_hat[i + n2] = u_hat_right[i];
         
-        u_coded[i] = u_coded_left[i] ^ u_coded_right[i]; 
+        u_coded[i] = u_coded_left[i];              // 코드 워드는 단순 순수 연결 (Plain Concat)
         u_coded[i + n2] = u_coded_right[i];
-    }   
+    }
 }
 
 // [메인 컨트롤러] 몬테카를로 루프 엔진
