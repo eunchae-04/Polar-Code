@@ -91,12 +91,20 @@ Polar-Code/
 ### 1) 실행 명령
 본 프로그램은 대규모 몬테카를로 연산 완료 후, 연동된 Gnuplot 파이프를 통해 세 시나리오의 Y축 스케일을 일치시킨 3분할 독립 가로형 시각화 패널(`multiplot`)을 화면에 자동으로 팝업합니다.
 
+```
+# 1. 컴파일
+gcc -std=c11 -O2 polar_code.c -lm -o polar_legacy.exe
+
+# 2. 프로그램 실행
+./polar_legacy
+```
+
 ```bash
 # 1. 컴파일
 gcc -std=c11 -O2 -Iinclude src\main.c src\rng.c src\polar_math.c src\polar_codec.c src\simulation.c src\plot.c -lm -o polar_code.exe
 
 # 2. 프로그램 실행
-./polar
+./polar_code
 ```
 
 ### 2) 데이터 출력 파일 명세
