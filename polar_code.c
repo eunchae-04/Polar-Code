@@ -3,8 +3,8 @@
 #include <math.h>
 #include <stdbool.h>
 #include <time.h>
+#include <stdint.h> // 64비트 고정 정수형(uint64_t) 사용을 위한 헤더
 
-// ★ [쥬피터 환경 대응 패치] M_PI 가 선언되어 있지 않은 경우 직접 매핑하여 에러 원천 차단
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -12,6 +12,31 @@
 #define N 1024
 #define K 512
 #define R ((double)K / (double)N)
+
+// =================================================================
+// 64비트 난수 생성기 (Xorshift64 Engine)
+// =================================================================
+uint64_t rng_state;
+
+// 난수 엔진 초기화 시드 설정
+void seed_xorshift64() {
+    rng_state = (uint64_t)time(NULL) ^ 0x5DEECE66DL;
+    if (rng_state == 0) rng_state = 1; // 상태값이 0이 되는 것을 방지
+}
+
+// 64비트 난수 생성 (기존 rand()의 32,767 한계를 초월하여 2^64-1 주기 확보)
+uint64_t xorshift64() {
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 7;
+    rng_state ^= rng_state << 17;
+    return rng_state;
+}
+
+// 0.0 ~ 1.0 사이의 정밀한 double 난수 생성
+double rand_double() {
+    return (double)xorshift64() / 18446744073709551615ULL; // UINT64_MAX 나눗셈
+}
+// =================================================================
 
 // [GA 구축] 정석 phi 함수 구현
 double phi(double x) {
@@ -76,11 +101,11 @@ void construct_frozen_mask(double sigma2, int *info_mask) {
     for (int i = 0; i < K; i++) info_mask[idx[i]] = 1;
 }
 
-// [채널] Box-Muller 변환 기반 AWGN 생성기
+// [채널] Xorshift64 기반 정밀 AWGN 생성기
 double gauss_box_muller() {
     double u1, u2;
-    do { u1 = (double)rand() / (double)RAND_MAX; } while (u1 <= 1e-12);
-    u2 = (double)rand() / (double)RAND_MAX;
+    do { u1 = rand_double(); } while (u1 <= 1e-12); // 정밀 난수 엔진 적용
+    u2 = rand_double();
     return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
 }
 
@@ -98,7 +123,7 @@ void polar_encode_recursive(const int *u, int *x, int n_len) {
     polar_encode_recursive(u + n2, x + n2, n2);
 }
 
-// [수신단] 무결성이 검증된 진짜 1024-SC 재귀 복호화기 (Plain Concat 조합)
+// [수신단] 무결성 정밀 복호화기 (Exact SPA - Jacobian 적용)
 void polar_sc_decode_recursive(const double *llr, const int *info_mask, int *u_hat, int *u_coded, int n_len, int *mask_offset) {
     if (n_len == 1) {
         if (info_mask[*mask_offset]) {
@@ -117,14 +142,17 @@ void polar_sc_decode_recursive(const double *llr, const int *info_mask, int *u_h
     int u_hat_left[n2], u_hat_right[n2];
     int u_coded_left[n2], u_coded_right[n2];
     
-    // 1. Left Path: f-function 연산 (Min-Sum)
+    // 1. Left Path: Min-Sum 대신 오차가 완벽히 보정되는 Exact SPA 연산 적용
     for (int i = 0; i < n2; i++) {
         double l1 = llr[i];
         double l2 = llr[i + n2];
         double sign = ((l1 < 0.0) ^ (l2 < 0.0)) ? -1.0 : 1.0;
         double a1 = fabs(l1);
         double a2 = fabs(l2);
-        llr_left[i] = sign * (a1 < a2 ? a1 : a2);
+        double min_val = (a1 < a2) ? a1 : a2;
+        
+        // 수학적 연속성을 보장하는 정밀 Jacobian Logarithm 공식
+        llr_left[i] = sign * min_val + log(1.0 + exp(-(a1 + a2))) - log(1.0 + exp(-fabs(a1 - a2)));
     }
     
     polar_sc_decode_recursive(llr_left, info_mask, u_hat_left, u_coded_left, n2, mask_offset);
@@ -136,13 +164,11 @@ void polar_sc_decode_recursive(const double *llr, const int *info_mask, int *u_h
     
     polar_sc_decode_recursive(llr_right, info_mask, u_hat_right, u_coded_right, n2, mask_offset);
     
-    // 3. 상위 계층 코드로의 병합 및 반환 (Plain Concat 매핑)
+    // 3. 상위 계층 코드로의 병합 및 반환
     for (int i = 0; i < n2; i++) {
-        // 정보 비트(u_hat)는 순수 단순 연결로 결합합니다.
         u_hat[i] = u_hat_left[i];                  
         u_hat[i + n2] = u_hat_right[i];
         
-        // 채널 Coded 비트에 인코더 대칭 상위 기하학 구조(XOR)를 반영합니다.
         u_coded[i] = u_coded_left[i] ^ u_coded_right[i]; 
         u_coded[i + n2] = u_coded_right[i];
     }   
@@ -150,13 +176,12 @@ void polar_sc_decode_recursive(const double *llr, const int *info_mask, int *u_h
 
 // [메인 컨트롤러] 몬테카를로 루프 엔진
 int main(void) {
-    srand((unsigned)time(NULL));
+    seed_xorshift64(); // 난수 시드 초기화
     
     const double EbNo_start = 0.0;
     const double EbNo_end = 3.0;
     const double EbNo_step = 0.25;
     
-    // 데이터를 저장할 텍스트 파일 열기
     FILE *fp = fopen("simulation_results.txt", "w");
     if (fp == NULL) {
         printf("오류: 데이터 파일을 생성할 수 없습니다.\n");
@@ -171,7 +196,6 @@ int main(void) {
         double EbNo_linear = pow(10.0, snr_db / 10.0);
         double sigma2 = 1.0 / (2.0 * R * EbNo_linear);
         
-        // SNR 분산에 대응하는 정확한 가우시안 근사 마스크 형성
         int info_mask[N];
         construct_frozen_mask(sigma2, info_mask);
         
@@ -181,9 +205,9 @@ int main(void) {
         long total_frame_errors = 0;
         
         while (total_errors < 1000) {
-            // 1) 무작위 정보 비트 K개 생성
+            // 1) 정보 비트 생성
             int info_bits[K];
-            for (int i = 0; i < K; i++) info_bits[i] = rand() & 1;
+            for (int i = 0; i < K; i++) info_bits[i] = (int)(xorshift64() & 1);
             
             // 2) 마스크 채널 매핑 순서에 입각하여 u 벡터 조립
             int u[N];
@@ -208,7 +232,7 @@ int main(void) {
             double llr[N];
             for (int i = 0; i < N; i++) llr[i] = (2.0 / sigma2) * rx[i];
             
-            // 6) 무결성 재귀 디코더 연산
+            // 6) 무결성 재귀 디코더 연산 (Exact SPA)
             int u_hat[N], u_coded[N];
             int mask_offset = 0;
             polar_sc_decode_recursive(llr, info_mask, u_hat, u_coded, N, &mask_offset);
@@ -231,31 +255,24 @@ int main(void) {
         double final_ber = (double)total_errors / (double)total_bits;
         double final_fer = (double)total_frame_errors / (double)total_frames;
         
-        // 콘솔창에 결과 출력
         printf("%.2f dB\t\t%.6e\t%.6e\n", snr_db, final_ber, final_fer);
         fflush(stdout);
         
-        // 생성한 텍스트 파일에 실시간 데이터 입력 (공백 기준 분리)
         fprintf(fp, "%.2f %.6e %.6e\n", snr_db, final_ber, final_fer);
     }
     printf("=============================================\n");
 
-    // 시뮬레이션 종료 후 데이터 파일 닫기
     fclose(fp);
 
-    // Gnuplot을 실행하여 방금 저장한 텍스트 파일 불러와서 그리기
+    // Gnuplot 연동 시각화
     FILE *gp = popen("gnuplot -persist", "w");
     if (gp != NULL) {
-        fprintf(gp, "set title 'Polar Code (N=1024, K=512) SC Performance'\n");
+        fprintf(gp, "set title 'Polar Code (N=1024, K=512) Exact SPA Performance'\n");
         fprintf(gp, "set xlabel 'Eb/No (dB)'\n");
         fprintf(gp, "set ylabel 'Error Probability'\n");
-        fprintf(gp, "set logscale y\n"); // Y축 로그 스케일 설정
+        fprintf(gp, "set logscale y\n"); 
         fprintf(gp, "set grid\n");
-        
-        // 하드코딩 대신 파일(simulation_results.txt)을 직접 지정하여 플롯 명령 수행
-        // 1열(Eb/No) 기준 2열(BER), 1열 기준 3열(FER)을 선과 점(linespoints)으로 매핑
         fprintf(gp, "plot 'simulation_results.txt' using 1:2 with linespoints lw 2 title 'BER', 'simulation_results.txt' using 1:3 with linespoints lw 2 title 'FER'\n");
-        
         pclose(gp);
     }
 
