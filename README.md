@@ -48,7 +48,31 @@ $$\sigma^2_{est} = \alpha \times \sigma^2_{true}$$
 
 
 
-## 3. 시뮬레이션 환경 구성
+## 3. 프로젝트 구조
+
+```text
+Polar-Code/
+├─ include/
+│  ├─ polar_config.h
+│  ├─ rng.h
+│  ├─ polar_math.h
+│  ├─ polar_codec.h
+│  ├─ simulation.h
+│  └─ plot.h
+├─ src/
+│  ├─ main.c
+│  ├─ rng.c
+│  ├─ polar_math.c
+│  ├─ polar_codec.c
+│  ├─ simulation.c
+│  └─ plot.c
+├─ README.md
+├─ simulation_baseline.txt
+├─ simulation_scenario_a.txt
+└─ simulation_scenario_b.txt
+```
+
+## 4. 시뮬레이션 환경 구성
 
 | 파라미터 | 설정 값 | 비고 |
 | :--- | :--- | :--- |
@@ -62,14 +86,14 @@ $$\sigma^2_{est} = \alpha \times \sigma^2_{true}$$
 
 
 
-## 4. 실행 방법 및 결과 파일 명세
+## 5. 실행 방법 및 결과 파일 명세
 
 ### 1) 실행 명령
 본 프로그램은 대규모 몬테카를로 연산 완료 후, 연동된 Gnuplot 파이프를 통해 세 시나리오의 Y축 스케일을 일치시킨 3분할 독립 가로형 시각화 패널(`multiplot`)을 화면에 자동으로 팝업합니다.
 
 ```bash
 # 1. 컴파일
-gcc polar_code.c -o polar -lm
+gcc -std=c11 -O2 -Iinclude src\main.c src\rng.c src\polar_math.c src\polar_codec.c src\simulation.c src\plot.c -lm -o polar_code.exe
 
 # 2. 프로그램 실행
 ./polar
