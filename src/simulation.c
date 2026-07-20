@@ -21,7 +21,7 @@ void build_u_from_mask(const int *mask, const int *info_bits, int *u) {
     }
 }
 
-void awgn_channel(const int *x, double sigma2_true, double *rx) {
+static void awgn_channel(const int *x, double sigma2_true, double *rx) {
     double sigma = sqrt(sigma2_true);
     for (int i = 0; i < N; i++) {
         double tx = 1.0 - 2.0 * x[i];

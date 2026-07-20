@@ -10,7 +10,7 @@
 #define EBNO_START 0.0
 #define EBNO_END   3.0
 #define EBNO_STEP  0.25
-#define TARGET_ERRORS 5000
+#define TARGET_ERRORS 10000
 
 typedef struct {
     const char *output_file;

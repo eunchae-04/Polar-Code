@@ -2,6 +2,11 @@
 
 #include <math.h>
 
+static double log1pexp_neg(double x) {
+    if (x > 50.0) return exp(-x);
+    return log1p(exp(-x));
+}
+
 void polar_encode_recursive(const int *u, int *x, int n_len) {
     if (n_len == 1) {
         x[0] = u[0];
@@ -47,14 +52,14 @@ void polar_sc_decode_recursive(const double *llr, const int *info_mask,
         double min_val = (a1 < a2) ? a1 : a2;
 
         llr_left[i] = sign * min_val
-                    + log(1.0 + exp(-(a1 + a2)))
-                    - log(1.0 + exp(-fabs(a1 - a2)));
+                    + log1pexp_neg(a1 + a2)
+                    - log1pexp_neg(fabs(a1 - a2));
     }
 
     polar_sc_decode_recursive(llr_left, info_mask, u_hat_left, u_coded_left, n2, mask_offset);
 
     for (int i = 0; i < n2; i++) {
-        llr_right[i] = llr[i + n2] + (1 - 2 * u_hat_left[i]) * llr[i];
+        llr_right[i] = llr[i + n2] + (1 - 2 * u_coded_left[i]) * llr[i];
     }
 
     polar_sc_decode_recursive(llr_right, info_mask, u_hat_right, u_coded_right, n2, mask_offset);
