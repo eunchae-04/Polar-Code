@@ -52,20 +52,7 @@ $$\sigma^2_{est} = \alpha \times \sigma^2_{true}$$
 
 ```text
 Polar-Code/
-├─ include/
-│  ├─ polar_config.h
-│  ├─ rng.h
-│  ├─ polar_math.h
-│  ├─ polar_codec.h
-│  ├─ simulation.h
-│  └─ plot.h
-├─ src/
-│  ├─ main.c
-│  ├─ rng.c
-│  ├─ polar_math.c
-│  ├─ polar_codec.c
-│  ├─ simulation.c
-│  └─ plot.c
+├─ polar_code.c
 ├─ README.md
 ├─ simulation_baseline.txt
 ├─ simulation_scenario_a.txt
@@ -89,7 +76,7 @@ Polar-Code/
 ## 5. 실행 방법 및 결과 파일 명세
 
 ### 1) 실행 명령
-본 프로그램은 대규모 몬테카를로 연산 완료 후, 연동된 Gnuplot 파이프를 통해 세 시나리오의 Y축 스케일을 일치시킨 3분할 독립 가로형 시각화 패널(`multiplot`)을 화면에 자동으로 팝업합니다.
+본 프로그램은 대규모 몬테카를로 연산 완료 후, 연동된 Gnuplot 파이프를 통해 세 시나리오를 3분할 가로형 시각화 패널(`multiplot`)로 화면에 자동 표시합니다. 각 패널의 Y축은 시나리오별로 자동 조정됩니다.
 
 ```
 # 1. 컴파일
@@ -99,16 +86,52 @@ gcc -std=c11 -O2 polar_code.c -lm -o polar_legacy.exe
 ./polar_legacy
 ```
 
-```bash
-# 1. 컴파일
-gcc -std=c11 -O2 -Iinclude src\main.c src\rng.c src\polar_math.c src\polar_codec.c src\simulation.c src\plot.c -lm -o polar_code.exe
-
-# 2. 프로그램 실행
-./polar_code
-```
-
 ### 2) 데이터 출력 파일 명세
 실행이 완료되면 소스코드와 동일한 디렉터리 내에 시나리오별로 분리된 3개의 텍스트 파일이 자동 생성됩니다. 각 파일은 [Eb/No(dB)  BER  FER] 구조로 이루어져 있습니다.
 - `simulation_baseline.txt`: 이상적인 환경에서의 성능 지표 데이터
 - `simulation_scenario_a.txt`: LLR 스케일링 오차 반영 데이터 ($\alpha = 0.5$)
 - `simulation_scenario_b.txt`: 부호 설계 미스매치 반영 데이터 (0.0 dB 고정)
+
+
+
+## 🧪 잡음 추정 오차 및 Design SNR 미스매치 분석 (Robustness Analysis)
+
+실제 무선 수신기(Receiver)는 채널 상황을 100% 완벽하게 추정할 수 없으므로, 잡음 분산($\sigma^2$) 및 채널 환경 추정에 오차가 발생합니다. 본 시뮬레이션에서는 이러한 비이상적(Non-ideal) 수신기 환경이 Polar Code 복호 성능에 미치는 영향을 두 가지 시나리오로 나누어 분석합니다.
+
+
+### 1. Scenario A: LLR 미스매치 (LLR Mismatch / Noise Estimation Error)
+
+수신기가 실제 채널의 잡음 분산($\sigma^2_{\text{true}}$)을 오해하여, 오차 계수 $\alpha$가 반영된 추정 분산($\sigma^2_{\text{est}} = \alpha \times \sigma^2_{\text{true}}$)으로 초기 LLR을 구하는 상황입니다.
+
+- **발생 원인**: 수신기 내부의 채널 추정기(Channel Estimator) 오차
+- **수학적 영향**:
+  $$LLR_{\text{est}} = \frac{2}{\sigma^2_{\text{est}}} \cdot r = \frac{1}{\alpha} \left( \frac{2}{\sigma^2_{\text{true}}} \cdot r \right)$$
+  - $\alpha < 1.0$ (과소평가): LLR 스케일이 비정상적으로 급격히 커짐
+  - $\alpha > 1.0$ (과대평가): LLR 스케일이 너무 작게 축소됨
+- **Exact SPA 복호기에서의 열화 메커니즘**:
+  - 단순 Min-Sum 복호기와 달리, 본 시스템의 **Exact SPA 복호기**는 비선형 보정 항 $\ln(1 + e^{-|l_1+l_2|})$을 사용합니다.
+  - LLR의 절대적 스케일이 왜곡되면 보정 연산의 수학적 밸런스가 무너지면서 **BER/FER 성능이 비약적으로 열화**됩니다.
+
+---
+### 2. Scenario B: GA 부호 구축 미스매치 (Design SNR Mismatch)
+
+실제 운용되는 채널 SNR 대역이 변하더라도, 부호 구축(GA 마스크 생성) 시 특정 고정 SNR($\text{SNR}_{\text{design}}$) 기준의 프로즌 마스크(`info_mask`)를 재사용하는 상황입니다.
+
+- **발생 원인**: SNR 변화에 따라 매번 프로즌 마스크를 동적으로 재계산하지 않고, 단일 계산된 마스크를 고정 사용하는 하드웨어 구조
+- **열화 메커니즘**:
+  - Polar Code의 채널 극화(Polarization) 양상은 $E_b/N_0$ 수준에 따라 변화합니다.
+  - 실제 SNR과 설계 SNR의 차이가 커질수록 **가장 신뢰도가 높은 상위 $K$개 채널의 위치 선택이 어긋나게 되며**, 이로 인해 부호화 이득(Coding Gain)을 상실하고 에러 플로어(Error Floor)가 발생합니다.
+
+---
+
+### 📊 시나리오 요약 및 비교
+
+| 항목 | Scenario A (LLR Mismatch) | Scenario B (Design SNR Mismatch) |
+| :--- | :--- | :--- |
+| **변수 위치** | 수신단 LLR 스케일링 계산부 | 송/수신단 GA 프로즌 마스크 생성부 |
+| **핵심 원인** | 잡음 분산 추정 오차 ($\sigma^2_{\text{est}} \neq \sigma^2_{\text{true}}$) | 부호 설계 SNR과 실제 채널 SNR의 불일치 |
+| **주요 영향** | Exact SPA 복호기의 비선형 보정 항 왜곡 | 최적 정보 비트(Information Bit) 위치 지정 오류 |
+| **실험 목표** | 잡음 오차 계수 $\alpha$에 따른 BER 성능 마진 확인 | SNR 고정 마스크 사용 시의 성능 열화 폭 측정 |
+
+> 💡 **Key Takeaway**
+> 완벽한 수신기($\alpha = 1.0$, Dynamic GA) 대비 비이상적 환경에서 BER/FER 곡선이 위로 상승하는 폭을 정량적으로 측정함으로써, 실제 시스템 구현 시 요구되는 **채널 추정 정밀도 한계치**를 제시할 수 있습니다.

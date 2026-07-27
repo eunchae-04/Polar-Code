@@ -312,9 +312,10 @@ static void run_gnuplot_multiplot(void) {
 
     fprintf(gp, "set terminal windows size 1300, 450\n");
     fprintf(gp, "set multiplot layout 1,3 title 'Polar Code Scenario Analyses (N=1024, K=512)' font ',13'\n");
+    fprintf(gp, "set datafile separator whitespace\n");
     fprintf(gp, "set logscale y\n");
     fprintf(gp, "set grid\n");
-    fprintf(gp, "set yrange [1e-4:1]\n");
+    fprintf(gp, "unset yrange\n");
     fprintf(gp, "set xlabel 'Eb/No (dB)'\n");
     fprintf(gp, "set ylabel 'Error Probability'\n");
 
