@@ -104,6 +104,15 @@ gcc -std=c11 -O2 polar_code.c -lm -o polar_sim
 ./polar_sim --image input.png output.png [snr_db]
 ```
 
+#### scenarioA에 대한 실행 명령
+```bash
+gcc -std=c11 -O2 polar_code_scenarioA.c -lm -o polar_simA 
+
+./polar_simA --sweep-a       # alpha 스윕: 표 + 이미지 10장 + 그래프
+./polar_simA --sweep-b        # design SNR 스윕: 표 + 그래프
+```
+
+
 ### 2) 데이터 출력 파일 명세
 - `simulation_baseline.txt` / `simulation_scenario_a.txt` / `simulation_scenario_b.txt`: `[Eb/No(dB) BER FER]` 형식의 시나리오별 성능 지표
 - `scenario_comparison_summary.txt`: `[Eb/No(dB) Base_BER ScenA_BER A_over_Base ScenB_BER B_over_Base]` 형식의 baseline 대비 배율 비교표

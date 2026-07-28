@@ -28,6 +28,20 @@
 #define DEFAULT_IMAGE_SNR_DB 3.0
 #define RESULT_DIR "result"
 
+// Scenario A alpha sweep 설정: 실제 채널을 고정하고 alpha(=LLR 스케일 오차 계수)를
+// 여러 값으로 훑으며 BER/이미지 결과를 관찰. 0<alpha<1(LLR 확대)과 alpha>1(LLR 축소)을
+// 모두 포함하도록 대표값을 선정.
+#define ALPHA_SWEEP_TRUE_SNR_DB DEFAULT_IMAGE_SNR_DB
+static const double ALPHA_SWEEP_VALUES[] = {0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 2.5, 3.0};
+#define ALPHA_SWEEP_COUNT ((int)(sizeof(ALPHA_SWEEP_VALUES) / sizeof(ALPHA_SWEEP_VALUES[0])))
+
+// Scenario B design-SNR sweep 설정: 실제 채널을 이 SNR로 고정하고,
+// 마스크 설계 SNR을 DESIGN_SNR_SWEEP_START~END까지 훑으며 BER 변화를 관찰.
+#define DESIGN_SNR_SWEEP_TRUE_DB 3.0
+#define DESIGN_SNR_SWEEP_START (-2.0)
+#define DESIGN_SNR_SWEEP_END   5.0
+#define DESIGN_SNR_SWEEP_STEP  0.5
+
 #ifdef _WIN32
 #include <direct.h>
 #define MKDIR(path) _mkdir(path)
@@ -734,7 +748,7 @@ static void run_simulation(const SimulationConfig *cfg, const int *fixed_mask,
         if (cfg->use_fixed_mask) {
             for (int i = 0; i < N; i++) info_mask[i] = fixed_mask[i];
         } else {
-            construct_frozen_mask(sigma2_true, info_mask);
+            construct_frozen_mask(sigma2_est, info_mask);
         }
 
         long total_errors = 0;
@@ -822,11 +836,50 @@ static void print_scenario_comparison(const double *snr, int count,
     }
 }
 
-static void run_gnuplot_multiplot(void) {
+static void run_gnuplot_alpha_sweep(const char *data_file, double true_snr) {
     FILE *gp = POPEN("gnuplot -persist", "w");
     if (gp == NULL) return;
 
-    fprintf(gp, "set terminal windows size 1300, 450\n");
+    fprintf(gp, "set terminal windows size 900, 500\n");
+    fprintf(gp, "set title 'Scenario A: BER/FER vs alpha (true SNR = %.2f dB)'\n", true_snr);
+    fprintf(gp, "set datafile separator whitespace\n");
+    fprintf(gp, "set logscale x\n");
+    fprintf(gp, "set logscale y\n");
+    fprintf(gp, "set grid\n");
+    fprintf(gp, "set xlabel 'alpha (sigma2_est / sigma2_true)'\n");
+    fprintf(gp, "set ylabel 'Error Probability'\n");
+    fprintf(gp, "set arrow from 1, graph 0 to 1, graph 1 nohead lc rgb 'gray' dt 2\n");
+    fprintf(gp, "set label 'alpha=1 (baseline)' at 1, graph 0.95 offset 1,0 tc rgb 'gray'\n");
+    fprintf(gp,
+            "plot '%s' using 1:2 with linespoints lw 2 pt 7 lc rgb 'red' title 'BER', "
+            "'%s' using 1:3 with linespoints lw 2 pt 7 lc rgb 'blue' title 'FER'\n",
+            data_file, data_file);
+
+    PCLOSE(gp);
+}
+
+static void run_gnuplot_design_snr_sweep(const char *data_file, double true_snr) {
+    FILE *gp = POPEN("gnuplot -persist", "w");
+    if (gp == NULL) return;
+
+    fprintf(gp, "set terminal windows size 900, 500\n");
+    fprintf(gp, "set title 'Scenario B: BER/FER vs Design SNR (true channel = %.2f dB)'\n", true_snr);
+    fprintf(gp, "set datafile separator whitespace\n");
+    fprintf(gp, "set logscale y\n");
+    fprintf(gp, "set grid\n");
+    fprintf(gp, "set xlabel 'Design SNR (dB)'\n");
+    fprintf(gp, "set ylabel 'Error Probability'\n");
+    fprintf(gp, "set arrow from %.2f, graph 0 to %.2f, graph 1 nohead lc rgb 'gray' dt 2\n", true_snr, true_snr);
+    fprintf(gp, "set label 'design=true (ideal)' at %.2f, graph 0.95 offset 1,0 tc rgb 'gray'\n", true_snr);
+    fprintf(gp,
+            "plot '%s' using 1:2 with linespoints lw 2 pt 7 lc rgb 'red' title 'BER', "
+            "'%s' using 1:3 with linespoints lw 2 pt 7 lc rgb 'blue' title 'FER'\n",
+            data_file, data_file);
+
+    PCLOSE(gp);
+}
+static void run_gnuplot_multiplot(void) {
+    FILE *gp = POPEN("gnuplot -persist", "w");
     fprintf(gp, "set multiplot layout 1,3 title 'Polar Code Scenario Analyses (N=1024, K=512)' font ',13'\n");
     fprintf(gp, "set datafile separator whitespace\n");
     fprintf(gp, "set logscale y\n");
@@ -837,18 +890,18 @@ static void run_gnuplot_multiplot(void) {
 
     fprintf(gp, "set title '1. Baseline (Perfect)'\n");
     fprintf(gp,
-            "plot '" RESULT_DIR "/simulation_baseline.txt' using 1:2 with linespoints lw 2 lc rgb 'purple' title 'BER', "
-            "'" RESULT_DIR "/simulation_baseline.txt' using 1:3 with linespoints lw 2 lc rgb 'cyan' title 'FER'\n");
+            "plot 'simulation_baseline.txt' using 1:2 with linespoints lw 2 lc rgb 'purple' title 'BER', "
+            "'simulation_baseline.txt' using 1:3 with linespoints lw 2 lc rgb 'cyan' title 'FER'\n");
 
     fprintf(gp, "set title '2. Scenario A (LLR Error, a=0.5)'\n");
     fprintf(gp,
-            "plot '" RESULT_DIR "/simulation_scenario_a.txt' using 1:2 with linespoints lw 2 lc rgb 'red' title 'BER', "
-            "'" RESULT_DIR "/simulation_scenario_a.txt' using 1:3 with linespoints lw 2 lc rgb 'orange' title 'FER'\n");
+            "plot 'simulation_scenario_a.txt' using 1:2 with linespoints lw 2 lc rgb 'red' title 'BER', "
+            "'simulation_scenario_a.txt' using 1:3 with linespoints lw 2 lc rgb 'orange' title 'FER'\n");
 
     fprintf(gp, "set title '3. Scenario B (Design SNR=0dB)'\n");
     fprintf(gp,
-            "plot '" RESULT_DIR "/simulation_scenario_b.txt' using 1:2 with linespoints lw 2 lc rgb 'blue' title 'BER', "
-            "'" RESULT_DIR "/simulation_scenario_b.txt' using 1:3 with linespoints lw 2 lc rgb 'dark-green' title 'FER'\n");
+            "plot 'simulation_scenario_b.txt' using 1:2 with linespoints lw 2 lc rgb 'blue' title 'BER', "
+            "'simulation_scenario_b.txt' using 1:3 with linespoints lw 2 lc rgb 'dark-green' title 'FER'\n");
 
     fprintf(gp, "unset multiplot\n");
     PCLOSE(gp);
@@ -858,12 +911,222 @@ static void print_usage(const char *program_name) {
     printf("Usage:\n");
     printf("  %s                       # run the 3 built-in BER/FER simulations + per-scenario image tests\n", program_name);
     printf("  %s --alpha <value>       # ad hoc alpha (sigma2_est = alpha * sigma2_true) test vs baseline\n", program_name);
+    printf("  %s --sweep-a [true_snr]  # Scenario A alpha sweep (BER + image per alpha) at a fixed true SNR (default %.2f dB)\n",
+           program_name, ALPHA_SWEEP_TRUE_SNR_DB);
+    printf("  %s --sweep-b [true_snr]  # Scenario B design-SNR sweep at a fixed true channel SNR (default %.2f dB)\n",
+           program_name, DESIGN_SNR_SWEEP_TRUE_DB);
     printf("  %s --image input.pgm output.pgm [snr_db]\n", program_name);
     printf("\n");
     printf("Image mode supports binary grayscale PGM (P5) and, via Pillow, common formats (png/bmp/jpg).\n");
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--sweep-a") == 0) {
+        double true_snr = ALPHA_SWEEP_TRUE_SNR_DB;
+        if (argc >= 3) {
+            true_snr = atof(argv[2]);
+        }
+
+        seed_xorshift64();
+        ensure_result_dir();
+
+        double sigma2_true = compute_sigma2_from_ebno_db(true_snr);
+
+        // Scenario A 정의: 마스크는 항상 실제 채널 기준으로 정확하게 구성 (LLR 스케일만 오차)
+        int correct_mask[N];
+        construct_frozen_mask(sigma2_true, correct_mask);
+
+        double alpha_ber[ALPHA_SWEEP_COUNT];
+        double alpha_fer[ALPHA_SWEEP_COUNT];
+
+        for (int ai = 0; ai < ALPHA_SWEEP_COUNT; ai++) {
+            double alpha = ALPHA_SWEEP_VALUES[ai];
+            double sigma2_est = sigma2_true * alpha;
+
+            long total_errors = 0;
+            long total_bits = 0;
+            long total_frames = 0;
+            long total_frame_errors = 0;
+
+            while (total_errors < TARGET_ERRORS) {
+                int info_bits[K];
+                int u[N];
+                int x[N];
+                double rx[N];
+                double llr[N];
+                int u_hat[N];
+                int u_coded[N];
+                int mask_offset = 0;
+
+                generate_info_bits(info_bits);
+                build_u_from_mask(correct_mask, info_bits, u);
+                polar_encode_recursive(u, x, N);
+                awgn_channel(x, sigma2_true, rx);
+                compute_llr(rx, sigma2_est, llr);
+                polar_sc_decode_recursive(llr, correct_mask, u_hat, u_coded, N, &mask_offset);
+
+                long bit_errors = count_bit_errors(correct_mask, u_hat, info_bits);
+                if (bit_errors > 0) total_frame_errors++;
+                total_errors += bit_errors;
+                total_bits += K;
+                total_frames++;
+            }
+
+            alpha_ber[ai] = (double)total_errors / (double)total_bits;
+            alpha_fer[ai] = (double)total_frame_errors / (double)total_frames;
+
+            printf("  [%d/%d] alpha = %.2f done (BER = %.6e)\n", ai + 1, ALPHA_SWEEP_COUNT, alpha, alpha_ber[ai]);
+
+            char img_out[256];
+            snprintf(img_out, sizeof(img_out), RESULT_DIR "/lena_output_alpha_sweep_%.2f.png", alpha);
+            char img_label[64];
+            snprintf(img_label, sizeof(img_label), "Alpha Sweep alpha=%.2f", alpha);
+
+            run_image_mode(img_label, DEFAULT_LENA_INPUT, img_out, true_snr, false, 0.0, alpha);
+        }
+
+        // alpha=1.0 지점을 baseline 기준으로 찾아 배율(ratio) 계산
+        double baseline_ber = -1.0;
+        for (int ai = 0; ai < ALPHA_SWEEP_COUNT; ai++) {
+            if (fabs(ALPHA_SWEEP_VALUES[ai] - 1.0) < 1e-9) {
+                baseline_ber = alpha_ber[ai];
+                break;
+            }
+        }
+
+        printf("\n========================================\n");
+        printf(" Scenario A Alpha Sensitivity Sweep (true channel = %.2f dB)\n", true_snr);
+        printf("========================================\n");
+        printf("Alpha    BER            FER            Ratio_to_alpha1   Note\n");
+
+        char sweep_file[256];
+        snprintf(sweep_file, sizeof(sweep_file), RESULT_DIR "/scenario_a_alpha_sweep_true%.2f.txt", true_snr);
+        FILE *fp = fopen(sweep_file, "w");
+        if (fp) fprintf(fp, "Alpha BER FER Ratio_to_alpha1\n");
+
+        for (int ai = 0; ai < ALPHA_SWEEP_COUNT; ai++) {
+            double alpha = ALPHA_SWEEP_VALUES[ai];
+            double ratio = (baseline_ber > 0.0) ? (alpha_ber[ai] / baseline_ber) : NAN;
+            const char *note = (fabs(alpha - 1.0) < 1e-9) ? "<- baseline (alpha=1)" : "";
+
+            printf("%5.2f    %.6e   %.6e   %13.2fx     %s\n",
+                   alpha, alpha_ber[ai], alpha_fer[ai], ratio, note);
+            if (fp) fprintf(fp, "%.2f %.6e %.6e %.4f\n", alpha, alpha_ber[ai], alpha_fer[ai], ratio);
+        }
+
+        if (fp) {
+            fclose(fp);
+            printf("\nSaved to %s\n", sweep_file);
+        }
+
+        run_gnuplot_alpha_sweep(sweep_file, true_snr);
+
+        return 0;
+    }
+
+    if (argc >= 2 && strcmp(argv[1], "--sweep-b") == 0) {
+        double true_snr = DESIGN_SNR_SWEEP_TRUE_DB;
+        if (argc >= 3) {
+            true_snr = atof(argv[2]);
+        }
+
+        seed_xorshift64();
+        ensure_result_dir();
+
+        double sigma2_true = compute_sigma2_from_ebno_db(true_snr);
+
+        int num_points = (int)((DESIGN_SNR_SWEEP_END - DESIGN_SNR_SWEEP_START) / DESIGN_SNR_SWEEP_STEP + 1.5);
+        double *design_snr_arr = (double *)malloc(sizeof(double) * (size_t)num_points);
+        double *design_ber_arr = (double *)malloc(sizeof(double) * (size_t)num_points);
+        double *design_fer_arr = (double *)malloc(sizeof(double) * (size_t)num_points);
+        int count = 0;
+
+        for (double design_snr = DESIGN_SNR_SWEEP_START; design_snr <= DESIGN_SNR_SWEEP_END + 1e-9; design_snr += DESIGN_SNR_SWEEP_STEP) {
+            int fixed_mask[N];
+            double sigma2_design = compute_sigma2_from_ebno_db(design_snr);
+            construct_frozen_mask(sigma2_design, fixed_mask);
+
+            long total_errors = 0;
+            long total_bits = 0;
+            long total_frames = 0;
+            long total_frame_errors = 0;
+
+            while (total_errors < TARGET_ERRORS) {
+                int info_bits[K];
+                int u[N];
+                int x[N];
+                double rx[N];
+                double llr[N];
+                int u_hat[N];
+                int u_coded[N];
+                int mask_offset = 0;
+
+                generate_info_bits(info_bits);
+                build_u_from_mask(fixed_mask, info_bits, u);
+                polar_encode_recursive(u, x, N);
+                awgn_channel(x, sigma2_true, rx);
+                compute_llr(rx, sigma2_true, llr); // LLR 스케일은 정확 (마스크만 미스매치)
+                polar_sc_decode_recursive(llr, fixed_mask, u_hat, u_coded, N, &mask_offset);
+
+                long bit_errors = count_bit_errors(fixed_mask, u_hat, info_bits);
+                if (bit_errors > 0) total_frame_errors++;
+                total_errors += bit_errors;
+                total_bits += K;
+                total_frames++;
+            }
+
+            if (count < num_points) {
+                design_snr_arr[count] = design_snr;
+                design_ber_arr[count] = (double)total_errors / (double)total_bits;
+                design_fer_arr[count] = (double)total_frame_errors / (double)total_frames;
+            }
+            printf("  [%d/%d] design_snr = %.2f dB done (BER = %.6e)\n",
+                   count + 1, num_points, design_snr, design_ber_arr[count]);
+            count++;
+        }
+
+        double matched_ber = -1.0;
+        for (int i = 0; i < count; i++) {
+            if (fabs(design_snr_arr[i] - true_snr) < DESIGN_SNR_SWEEP_STEP / 2.0) {
+                matched_ber = design_ber_arr[i];
+                break;
+            }
+        }
+
+        printf("\n========================================\n");
+        printf(" Scenario B Design-SNR Sensitivity Sweep (true channel = %.2f dB)\n", true_snr);
+        printf("========================================\n");
+        printf("Design_SNR(dB)   BER            FER            Ratio_to_matched   Note\n");
+
+        char sweep_file[256];
+        snprintf(sweep_file, sizeof(sweep_file), RESULT_DIR "/scenario_b_design_snr_sweep_true%.2f.txt", true_snr);
+        FILE *fp = fopen(sweep_file, "w");
+        if (fp) fprintf(fp, "Design_SNR(dB) BER FER Ratio_to_matched\n");
+
+        for (int i = 0; i < count; i++) {
+            double ratio = (matched_ber > 0.0) ? (design_ber_arr[i] / matched_ber) : NAN;
+            const char *note = (fabs(design_snr_arr[i] - true_snr) < DESIGN_SNR_SWEEP_STEP / 2.0) ? "<- matched (ideal)" : "";
+
+            printf("%8.2f       %.6e   %.6e   %15.2fx   %s\n",
+                   design_snr_arr[i], design_ber_arr[i], design_fer_arr[i], ratio, note);
+            if (fp) fprintf(fp, "%.2f %.6e %.6e %.4f\n",
+                             design_snr_arr[i], design_ber_arr[i], design_fer_arr[i], ratio);
+        }
+
+        if (fp) {
+            fclose(fp);
+            printf("\nSaved to %s\n", sweep_file);
+        }
+
+        free(design_snr_arr);
+        free(design_ber_arr);
+        free(design_fer_arr);
+
+        run_gnuplot_design_snr_sweep(sweep_file, true_snr);
+
+        return 0;
+    }
+
     if (argc >= 2 && strcmp(argv[1], "--alpha") == 0) {
         if (argc < 3) {
             printf("Usage: %s --alpha <value>   (e.g. --alpha 2.0 for alpha>1, --alpha 0.5 for alpha<1)\n", argv[0]);
