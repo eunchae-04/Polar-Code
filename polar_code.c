@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
 #include <math.h>
 #include <stdbool.h>
 #include <time.h>
@@ -18,13 +20,21 @@
 #define EBNO_STEP  0.25
 #define TARGET_ERRORS 10000
 
+#define DEFAULT_LENA_INPUT "image.png"
+#define DEFAULT_IMAGE_SNR_DB 3.0
+
 #ifdef _WIN32
 #define POPEN _popen
 #define PCLOSE _pclose
+#define PYTHON_CMD "C:/msys64/ucrt64/bin/python.exe"
 #else
 #define POPEN popen
 #define PCLOSE pclose
+#define PYTHON_CMD "python3"
 #endif
+
+#define TMP_INPUT_PGM  "__polar_tmp_input.pgm"
+#define TMP_OUTPUT_PGM "__polar_tmp_output.pgm"
 
 typedef struct {
     const char *output_file;
@@ -33,6 +43,21 @@ typedef struct {
     bool use_fixed_mask;          // true면 fixed_mask_snr_db로 생성한 마스크를 고정 사용
     double fixed_mask_snr_db;     // fixed mask 생성용 SNR
 } SimulationConfig;
+
+typedef struct {
+    int width;
+    int height;
+    unsigned char *pixels;
+} GrayImage;
+
+typedef struct {
+    long pixel_differences;
+    double mean_absolute_error;
+    double mean_squared_error;
+    double psnr;
+    unsigned char min_difference;
+    unsigned char max_difference;
+} ImageComparisonStats;
 
 // =================================================================
 // 난수 생성기
@@ -245,6 +270,427 @@ static long count_bit_errors(const int *info_mask, const int *u_hat, const int *
     return bit_errors;
 }
 
+static void free_gray_image(GrayImage *image) {
+    if (image->pixels != NULL) {
+        free(image->pixels);
+        image->pixels = NULL;
+    }
+    image->width = 0;
+    image->height = 0;
+}
+
+static bool read_pgm_token(FILE *fp, char *buffer, size_t buffer_size) {
+    int ch;
+
+    do {
+        ch = fgetc(fp);
+        if (ch == '#') {
+            while (ch != '\n' && ch != EOF) ch = fgetc(fp);
+        }
+    } while (ch != EOF && isspace((unsigned char)ch));
+
+    if (ch == EOF) return false;
+
+    size_t len = 0;
+    while (ch != EOF && !isspace((unsigned char)ch) && ch != '#') {
+        if (len + 1 < buffer_size) {
+            buffer[len++] = (char)ch;
+        }
+        ch = fgetc(fp);
+    }
+
+    if (ch == '#') {
+        while (ch != '\n' && ch != EOF) ch = fgetc(fp);
+    }
+
+    buffer[len] = '\0';
+    return len > 0;
+}
+
+static bool read_pgm_image(const char *file_path, GrayImage *image) {
+    FILE *fp = fopen(file_path, "rb");
+    if (fp == NULL) {
+        printf("Failed to open input image: %s\n", file_path);
+        return false;
+    }
+
+    int max_val = 0;
+    bool ok = false;
+
+    if (fscanf(fp, " P5 %d %d %d", &image->width, &image->height, &max_val) != 3) {
+        printf("Failed to parse PGM header: %s\n", file_path);
+        goto cleanup;
+    }
+    if (image->width <= 0 || image->height <= 0 || max_val != 255) {
+        printf("Unsupported PGM dimensions or max value: %d x %d, max=%d\n",
+               image->width, image->height, max_val);
+        goto cleanup;
+    }
+
+    int separator = fgetc(fp);
+    if (separator == EOF) {
+        printf("PGM header ended unexpectedly: %s\n", file_path);
+        goto cleanup;
+    }
+
+    size_t pixel_count = (size_t)image->width * (size_t)image->height;
+    image->pixels = (unsigned char *)malloc(pixel_count);
+    if (image->pixels == NULL) {
+        printf("Failed to allocate %zu bytes for image pixels.\n", pixel_count);
+        goto cleanup;
+    }
+
+    if (fread(image->pixels, 1, pixel_count, fp) != pixel_count) {
+        printf("Failed to read %zu image pixels from %s\n", pixel_count, file_path);
+        goto cleanup;
+    }
+
+    ok = true;
+
+cleanup:
+    if (!ok) {
+        free_gray_image(image);
+    }
+    fclose(fp);
+    return ok;
+}
+
+static bool has_extension_ci(const char *path, const char *extension) {
+    size_t path_len = strlen(path);
+    size_t ext_len = strlen(extension);
+    if (path_len < ext_len) return false;
+
+    const char *path_ext = path + (path_len - ext_len);
+    for (size_t i = 0; i < ext_len; i++) {
+        unsigned char a = (unsigned char)path_ext[i];
+        unsigned char b = (unsigned char)extension[i];
+        if (tolower(a) != tolower(b)) return false;
+    }
+    return true;
+}
+
+static bool convert_image_to_pgm(const char *input_path, const char *output_pgm_path) {
+    char command[2048];
+    int written = snprintf(
+        command,
+        sizeof(command),
+        "%s -c \"from PIL import Image; import sys; Image.open(sys.argv[1]).convert('L').save(sys.argv[2])\" \"%s\" \"%s\"",
+        PYTHON_CMD,
+        input_path,
+        output_pgm_path
+    );
+
+    if (written < 0 || (size_t)written >= sizeof(command)) {
+        printf("Failed to build image conversion command.\n");
+        return false;
+    }
+
+    return system(command) == 0;
+}
+
+static void build_preview_path(const char *output_path, char *preview_path, size_t preview_size) {
+    const char *dot = strrchr(output_path, '.');
+    if (dot != NULL && has_extension_ci(dot, ".png")) {
+        size_t base_len = (size_t)(dot - output_path);
+        snprintf(preview_path, preview_size, "%.*s_preview.png", (int)base_len, output_path);
+        return;
+    }
+
+    snprintf(preview_path, preview_size, "%s_preview.png", output_path);
+}
+
+static bool create_image_preview(const char *input_path, const char *decoded_path, const char *preview_path) {
+    char command[4096];
+    int written = snprintf(
+        command,
+        sizeof(command),
+        "%s -c \"from PIL import Image, ImageChops, ImageOps, ImageDraw; import sys; src=Image.open(sys.argv[1]).convert('L'); dec=Image.open(sys.argv[2]).convert('L'); diff=ImageOps.autocontrast(ImageChops.difference(src, dec)); pad=12; label_h=28; w=max(src.width, dec.width, diff.width); h=max(src.height, dec.height, diff.height); canvas=Image.new('L', (w*3 + pad*4, h + label_h + pad*2), 255); d=ImageDraw.Draw(canvas); canvas.paste(src, (pad, pad + label_h)); d.text((pad, pad), 'Original', fill=0); canvas.paste(dec, (w + pad*2, pad + label_h)); d.text((w + pad*2, pad), 'Decoded', fill=0); canvas.paste(diff, (w*2 + pad*3, pad + label_h)); d.text((w*2 + pad*3, pad), 'Diff', fill=0); canvas.save(sys.argv[3])\" \"%s\" \"%s\" \"%s\"",
+        PYTHON_CMD,
+        input_path,
+        decoded_path,
+        preview_path
+    );
+
+    if (written < 0 || (size_t)written >= sizeof(command)) {
+        printf("Failed to build preview image command.\n");
+        return false;
+    }
+
+    return system(command) == 0;
+}
+
+static void open_image_file(const char *path) {
+#ifdef _WIN32
+    char command[2048];
+    if (snprintf(command, sizeof(command), "cmd /c start \"\" \"%s\"", path) > 0) {
+        system(command);
+    }
+#else
+    (void)path;
+#endif
+}
+
+static bool load_input_image_any_format(const char *input_path, GrayImage *image, char *temp_pgm_path, size_t temp_pgm_size) {
+    if (has_extension_ci(input_path, ".pgm")) {
+        return read_pgm_image(input_path, image);
+    }
+
+    if (snprintf(temp_pgm_path, temp_pgm_size, "%s", TMP_INPUT_PGM) < 0) {
+        return false;
+    }
+
+    if (!convert_image_to_pgm(input_path, temp_pgm_path)) {
+        printf("Failed to convert input image to PGM: %s\n", input_path);
+        return false;
+    }
+
+    if (!read_pgm_image(temp_pgm_path, image)) {
+        remove(temp_pgm_path);
+        return false;
+    }
+
+    return true;
+}
+
+static bool convert_pgm_to_requested_output(const char *pgm_path, const char *output_path) {
+    if (has_extension_ci(output_path, ".pgm")) {
+        remove(output_path);
+        return rename(pgm_path, output_path) == 0;
+    }
+
+    if (!convert_image_to_pgm(pgm_path, output_path)) {
+        printf("Failed to convert output PGM to target format: %s\n", output_path);
+        return false;
+    }
+
+    return true;
+}
+
+static bool write_pgm_image(const char *file_path, const GrayImage *image) {
+    FILE *fp = fopen(file_path, "wb");
+    if (fp == NULL) return false;
+
+    size_t pixel_count = (size_t)image->width * (size_t)image->height;
+    bool ok = fprintf(fp, "P5\n%d %d\n255\n", image->width, image->height) > 0
+           && fwrite(image->pixels, 1, pixel_count, fp) == pixel_count;
+
+    fclose(fp);
+    return ok;
+}
+
+static void bytes_to_bits_msb(const unsigned char *bytes, size_t byte_count, int *bits) {
+    for (size_t i = 0; i < byte_count; i++) {
+        unsigned char value = bytes[i];
+        for (int bit = 0; bit < 8; bit++) {
+            bits[i * 8 + bit] = (value >> (7 - bit)) & 1;
+        }
+    }
+}
+
+static void bits_to_bytes_msb(const int *bits, size_t bit_count, unsigned char *bytes) {
+    size_t byte_count = bit_count / 8;
+    for (size_t i = 0; i < byte_count; i++) {
+        unsigned char value = 0;
+        for (int bit = 0; bit < 8; bit++) {
+            value = (unsigned char)((value << 1) | (bits[i * 8 + bit] & 1));
+        }
+        bytes[i] = value;
+    }
+}
+
+static ImageComparisonStats compare_gray_images(const GrayImage *before, const GrayImage *after) {
+    ImageComparisonStats stats = {0, 0.0, 0.0, 0.0, 255, 0};
+    size_t pixel_count = (size_t)before->width * (size_t)before->height;
+
+    for (size_t i = 0; i < pixel_count; i++) {
+        int diff = (int)before->pixels[i] - (int)after->pixels[i];
+        int abs_diff = abs(diff);
+
+        if (abs_diff != 0) {
+            stats.pixel_differences++;
+        }
+
+        stats.mean_absolute_error += (double)abs_diff;
+        stats.mean_squared_error += (double)(diff * diff);
+
+        if ((unsigned char)abs_diff < stats.min_difference) {
+            stats.min_difference = (unsigned char)abs_diff;
+        }
+        if ((unsigned char)abs_diff > stats.max_difference) {
+            stats.max_difference = (unsigned char)abs_diff;
+        }
+    }
+
+    if (pixel_count > 0) {
+        stats.mean_absolute_error /= (double)pixel_count;
+        stats.mean_squared_error /= (double)pixel_count;
+    }
+
+    if (stats.mean_squared_error > 0.0) {
+        stats.psnr = 10.0 * log10((255.0 * 255.0) / stats.mean_squared_error);
+    } else {
+        stats.psnr = INFINITY;
+    }
+
+    return stats;
+}
+
+static void transmit_image_bits(const int *input_bits, size_t input_bit_count,
+                                double snr_db, bool use_fixed_mask,
+                                double fixed_mask_snr_db, double llr_scale,
+                                int *output_bits) {
+    double sigma2_true = compute_sigma2_from_ebno_db(snr_db);
+    double sigma2_est = sigma2_true * llr_scale;
+
+    int fixed_mask[N];
+    int *info_mask_source = NULL;
+    if (use_fixed_mask) {
+        double sigma2_design = compute_sigma2_from_ebno_db(fixed_mask_snr_db);
+        construct_frozen_mask(sigma2_design, fixed_mask);
+        info_mask_source = fixed_mask;
+    }
+
+    size_t block_count = (input_bit_count + K - 1) / K;
+    size_t padded_bit_count = block_count * (size_t)K;
+
+    for (size_t block = 0; block < block_count; block++) {
+        int info_bits[K] = {0};
+        int u[N];
+        int x[N];
+        double rx[N];
+        double llr[N];
+        int u_hat[N];
+        int u_coded[N];
+        int info_mask[N];
+        int mask_offset = 0;
+
+        if (use_fixed_mask) {
+            for (int i = 0; i < N; i++) info_mask[i] = info_mask_source[i];
+        } else {
+            construct_frozen_mask(sigma2_true, info_mask);
+        }
+
+        size_t block_start = block * (size_t)K;
+        size_t remaining = (input_bit_count > block_start) ? (input_bit_count - block_start) : 0;
+        size_t copy_count = (remaining < (size_t)K) ? remaining : (size_t)K;
+
+        for (size_t i = 0; i < copy_count; i++) {
+            info_bits[i] = input_bits[block_start + i];
+        }
+
+        build_u_from_mask(info_mask, info_bits, u);
+        polar_encode_recursive(u, x, N);
+        awgn_channel(x, sigma2_true, rx);
+        compute_llr(rx, sigma2_est, llr);
+        polar_sc_decode_recursive(llr, info_mask, u_hat, u_coded, N, &mask_offset);
+
+        size_t output_offset = block * (size_t)K;
+        size_t out_ptr = 0;
+        for (int i = 0; i < N; i++) {
+            if (info_mask[i]) {
+                output_bits[output_offset + out_ptr] = u_hat[i];
+                out_ptr++;
+            }
+        }
+
+        (void)padded_bit_count;
+    }
+}
+
+static void run_image_mode(const char *scenario_label, const char *input_path, const char *output_path,
+                            double snr_db, bool use_fixed_mask, double fixed_mask_snr_db, double llr_scale) {
+    GrayImage input_image = {0, 0, NULL};
+    GrayImage output_image = {0, 0, NULL};
+    char temp_input_pgm[64] = {0};
+    char temp_output_pgm[64] = TMP_OUTPUT_PGM;
+    char preview_path[512] = {0};
+
+    printf("\n--- [%s] Image Transmission ---\n", scenario_label);
+
+    if (!load_input_image_any_format(input_path, &input_image, temp_input_pgm, sizeof(temp_input_pgm))) {
+        printf("Failed to read input image: %s\n", input_path);
+        return;
+    }
+
+    size_t pixel_count = (size_t)input_image.width * (size_t)input_image.height;
+    size_t input_bit_count = pixel_count * 8;
+    size_t block_count = (input_bit_count + K - 1) / K;
+    size_t output_bit_count = block_count * (size_t)K;
+
+    int *input_bits = (int *)calloc(output_bit_count, sizeof(int));
+    int *output_bits = (int *)calloc(output_bit_count, sizeof(int));
+    if (input_bits == NULL || output_bits == NULL) {
+        printf("Failed to allocate bit buffers for image transmission.\n");
+        free(input_bits);
+        free(output_bits);
+        free_gray_image(&input_image);
+        return;
+    }
+
+    bytes_to_bits_msb(input_image.pixels, pixel_count, input_bits);
+    transmit_image_bits(input_bits, input_bit_count, snr_db, use_fixed_mask, fixed_mask_snr_db, llr_scale, output_bits);
+
+    output_image.width = input_image.width;
+    output_image.height = input_image.height;
+    output_image.pixels = (unsigned char *)malloc(pixel_count);
+    if (output_image.pixels == NULL) {
+        printf("Failed to allocate output image buffer.\n");
+        free(input_bits);
+        free(output_bits);
+        free_gray_image(&input_image);
+        return;
+    }
+
+    bits_to_bytes_msb(output_bits, input_bit_count, output_image.pixels);
+
+    ImageComparisonStats stats = compare_gray_images(&input_image, &output_image);
+
+    long bit_errors = 0;
+    for (size_t i = 0; i < input_bit_count; i++) {
+        if (input_bits[i] != output_bits[i]) bit_errors++;
+    }
+
+    if (!write_pgm_image(temp_output_pgm, &output_image)) {
+        printf("Failed to write output image: %s\n", output_path);
+    } else {
+        bool output_ready = convert_pgm_to_requested_output(temp_output_pgm, output_path);
+        remove(temp_output_pgm);
+
+        if (!output_ready) {
+            printf("Failed to finalize output image: %s\n", output_path);
+        } else {
+            build_preview_path(output_path, preview_path, sizeof(preview_path));
+            if (create_image_preview(input_path, output_path, preview_path)) {
+                printf("Preview image: %s\n", preview_path);
+                open_image_file(preview_path);
+            }
+
+            printf("Scenario: %s\n", scenario_label);
+            printf("Input: %s\n", input_path);
+            printf("Output: %s\n", output_path);
+            printf("SNR: %.2f dB\n", snr_db);
+            printf("Bit errors: %ld / %zu\n", bit_errors, input_bit_count);
+            printf("Pixel differences: %ld / %zu\n", stats.pixel_differences, pixel_count);
+            printf("MAE: %.6f\n", stats.mean_absolute_error);
+            printf("MSE: %.6f\n", stats.mean_squared_error);
+            if (isfinite(stats.psnr)) {
+                printf("PSNR: %.6f dB\n", stats.psnr);
+            } else {
+                printf("PSNR: infinite (no pixel changes)\n");
+            }
+            printf("Diff range: %u to %u\n", stats.min_difference, stats.max_difference);
+        }
+    }
+
+    if (temp_input_pgm[0] != '\0') {
+        remove(temp_input_pgm);
+    }
+    free(input_bits);
+    free(output_bits);
+    free_gray_image(&input_image);
+    free_gray_image(&output_image);
+}
+
 static void run_simulation(const SimulationConfig *cfg, const int *fixed_mask) {
     FILE *fp = fopen(cfg->output_file, "w");
     if (fp == NULL) {
@@ -338,7 +784,31 @@ static void run_gnuplot_multiplot(void) {
     PCLOSE(gp);
 }
 
-int main(void) {
+static void print_usage(const char *program_name) {
+    printf("Usage:\n");
+    printf("  %s                # run the BER/FER simulations + per-scenario image tests\n", program_name);
+    printf("  %s --image input.pgm output.pgm [snr_db]\n", program_name);
+    printf("\n");
+    printf("Image mode supports binary grayscale PGM (P5) and, via Pillow, common formats (png/bmp/jpg).\n");
+}
+
+int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--image") == 0) {
+        if (argc < 4) {
+            print_usage(argv[0]);
+            return 1;
+        }
+
+        double snr_db = 3.0;
+        if (argc >= 5) {
+            snr_db = atof(argv[4]);
+        }
+
+        seed_xorshift64();
+        run_image_mode("Custom", argv[2], argv[3], snr_db, false, 0.0, 1.0);
+        return 0;
+    }
+
     seed_xorshift64();
 
     SimulationConfig baseline = {
@@ -372,6 +842,19 @@ int main(void) {
     run_simulation(&baseline, NULL);
     run_simulation(&scenario_a, NULL);
     run_simulation(&scenario_b, fixed_info_mask);
+
+    printf("\n========================================\n");
+    printf(" Image Transmission Test per Scenario (%s)\n", DEFAULT_LENA_INPUT);
+    printf("========================================\n");
+
+    run_image_mode("Baseline", DEFAULT_LENA_INPUT, "lena_output_baseline.png",
+                   DEFAULT_IMAGE_SNR_DB, baseline.use_fixed_mask, baseline.fixed_mask_snr_db, baseline.llr_scale);
+
+    run_image_mode("Scenario A (LLR Mismatch)", DEFAULT_LENA_INPUT, "lena_output_scenario_a.png",
+                   DEFAULT_IMAGE_SNR_DB, scenario_a.use_fixed_mask, scenario_a.fixed_mask_snr_db, scenario_a.llr_scale);
+
+    run_image_mode("Scenario B (Design SNR Mismatch)", DEFAULT_LENA_INPUT, "lena_output_scenario_b.png",
+                   DEFAULT_IMAGE_SNR_DB, scenario_b.use_fixed_mask, scenario_b.fixed_mask_snr_db, scenario_b.llr_scale);
 
     run_gnuplot_multiplot();
 
