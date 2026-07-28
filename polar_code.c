@@ -20,8 +20,31 @@
 #define EBNO_STEP  0.25
 #define TARGET_ERRORS 10000
 
+// (EBNO_END - EBNO_START) / EBNO_STEP + 1 = (3.0 - 0.0) / 0.25 + 1 = 13
+// EBNO_START/END/STEP을 바꾸면 이 값도 함께 맞춰줘야 합니다.
+#define NUM_SNR_POINTS 13
+
 #define DEFAULT_LENA_INPUT "image.png"
 #define DEFAULT_IMAGE_SNR_DB 3.0
+#define RESULT_DIR "result"
+
+#ifdef _WIN32
+#include <direct.h>
+#define MKDIR(path) _mkdir(path)
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#define MKDIR(path) mkdir(path, 0755)
+#endif
+#include <errno.h>
+
+// result/ 폴더가 없으면 생성. 이미 있으면(EEXIST) 조용히 통과.
+static void ensure_result_dir(void) {
+    if (MKDIR(RESULT_DIR) != 0 && errno != EEXIST) {
+        printf("Warning: failed to create '%s' directory (errno=%d). Output files may fail to save.\n",
+               RESULT_DIR, errno);
+    }
+}
 
 #ifdef _WIN32
 #define POPEN _popen
@@ -691,7 +714,8 @@ static void run_image_mode(const char *scenario_label, const char *input_path, c
     free_gray_image(&output_image);
 }
 
-static void run_simulation(const SimulationConfig *cfg, const int *fixed_mask) {
+static void run_simulation(const SimulationConfig *cfg, const int *fixed_mask,
+                            double *snr_out, double *ber_out, double *fer_out) {
     FILE *fp = fopen(cfg->output_file, "w");
     if (fp == NULL) {
         printf("Failed to open output file: %s\n", cfg->output_file);
@@ -701,6 +725,7 @@ static void run_simulation(const SimulationConfig *cfg, const int *fixed_mask) {
     printf("\n%s\n", cfg->title);
     printf("Eb/No (dB)\tBER\t\tFER\n");
 
+    int point_idx = 0;
     for (double snr_db = EBNO_START; snr_db <= EBNO_END + 1e-9; snr_db += EBNO_STEP) {
         double sigma2_true = compute_sigma2_from_ebno_db(snr_db);
         double sigma2_est = sigma2_true * cfg->llr_scale;
@@ -709,7 +734,7 @@ static void run_simulation(const SimulationConfig *cfg, const int *fixed_mask) {
         if (cfg->use_fixed_mask) {
             for (int i = 0; i < N; i++) info_mask[i] = fixed_mask[i];
         } else {
-            construct_frozen_mask(sigma2_true, info_mask);
+            construct_frozen_mask(sigma2_est, info_mask);
         }
 
         long total_errors = 0;
@@ -747,9 +772,54 @@ static void run_simulation(const SimulationConfig *cfg, const int *fixed_mask) {
 
         printf("%.2f dB\t\t%.6e\t%.6e\n", snr_db, final_ber, final_fer);
         fprintf(fp, "%.2f %.6e %.6e\n", snr_db, final_ber, final_fer);
+
+        if (point_idx < NUM_SNR_POINTS) {
+            if (snr_out) snr_out[point_idx] = snr_db;
+            if (ber_out) ber_out[point_idx] = final_ber;
+            if (fer_out) fer_out[point_idx] = final_fer;
+        }
+        point_idx++;
     }
 
     fclose(fp);
+}
+
+// baseline 대비 scenario A/B의 BER/FER이 SNR별로 몇 배 나빠지는지 요약 출력 + 파일 저장.
+// 교수님이 물어본 "알파 오추정이 얼마나 차이 나느냐"에 숫자로 답하기 위한 함수.
+static void print_scenario_comparison(const double *snr, int count,
+                                       const double *base_ber, const double *base_fer,
+                                       const double *a_ber, const double *a_fer,
+                                       const double *b_ber, const double *b_fer) {
+    FILE *fp = fopen(RESULT_DIR "/scenario_comparison_summary.txt", "w");
+
+    printf("\n========================================\n");
+    printf(" Scenario Comparison Summary (vs Baseline)\n");
+    printf("========================================\n");
+    printf("Eb/No(dB)  Base_BER      ScenA_BER     A/Base(x)   ScenB_BER     B/Base(x)\n");
+
+    if (fp) {
+        fprintf(fp, "Eb/No(dB) Base_BER ScenA_BER A_over_Base ScenB_BER B_over_Base\n");
+    }
+
+    for (int i = 0; i < count; i++) {
+        double ratio_a = (base_ber[i] > 0.0) ? (a_ber[i] / base_ber[i]) : NAN;
+        double ratio_b = (base_ber[i] > 0.0) ? (b_ber[i] / base_ber[i]) : NAN;
+
+        printf("%6.2f     %.6e   %.6e   %9.2fx   %.6e   %9.2fx\n",
+               snr[i], base_ber[i], a_ber[i], ratio_a, b_ber[i], ratio_b);
+
+        if (fp) {
+            fprintf(fp, "%.2f %.6e %.6e %.4f %.6e %.4f\n",
+                    snr[i], base_ber[i], a_ber[i], ratio_a, b_ber[i], ratio_b);
+        }
+
+        (void)base_fer; (void)a_fer; (void)b_fer;
+    }
+
+    if (fp) {
+        printf("\nSaved to %s/scenario_comparison_summary.txt\n", RESULT_DIR);
+        fclose(fp);
+    }
 }
 
 static void run_gnuplot_multiplot(void) {
@@ -767,18 +837,18 @@ static void run_gnuplot_multiplot(void) {
 
     fprintf(gp, "set title '1. Baseline (Perfect)'\n");
     fprintf(gp,
-            "plot 'simulation_baseline.txt' using 1:2 with linespoints lw 2 lc rgb 'purple' title 'BER', "
-            "'simulation_baseline.txt' using 1:3 with linespoints lw 2 lc rgb 'cyan' title 'FER'\n");
+            "plot '" RESULT_DIR "/simulation_baseline.txt' using 1:2 with linespoints lw 2 lc rgb 'purple' title 'BER', "
+            "'" RESULT_DIR "/simulation_baseline.txt' using 1:3 with linespoints lw 2 lc rgb 'cyan' title 'FER'\n");
 
     fprintf(gp, "set title '2. Scenario A (LLR Error, a=0.5)'\n");
     fprintf(gp,
-            "plot 'simulation_scenario_a.txt' using 1:2 with linespoints lw 2 lc rgb 'red' title 'BER', "
-            "'simulation_scenario_a.txt' using 1:3 with linespoints lw 2 lc rgb 'orange' title 'FER'\n");
+            "plot '" RESULT_DIR "/simulation_scenario_a.txt' using 1:2 with linespoints lw 2 lc rgb 'red' title 'BER', "
+            "'" RESULT_DIR "/simulation_scenario_a.txt' using 1:3 with linespoints lw 2 lc rgb 'orange' title 'FER'\n");
 
     fprintf(gp, "set title '3. Scenario B (Design SNR=0dB)'\n");
     fprintf(gp,
-            "plot 'simulation_scenario_b.txt' using 1:2 with linespoints lw 2 lc rgb 'blue' title 'BER', "
-            "'simulation_scenario_b.txt' using 1:3 with linespoints lw 2 lc rgb 'dark-green' title 'FER'\n");
+            "plot '" RESULT_DIR "/simulation_scenario_b.txt' using 1:2 with linespoints lw 2 lc rgb 'blue' title 'BER', "
+            "'" RESULT_DIR "/simulation_scenario_b.txt' using 1:3 with linespoints lw 2 lc rgb 'dark-green' title 'FER'\n");
 
     fprintf(gp, "unset multiplot\n");
     PCLOSE(gp);
@@ -786,13 +856,91 @@ static void run_gnuplot_multiplot(void) {
 
 static void print_usage(const char *program_name) {
     printf("Usage:\n");
-    printf("  %s                # run the BER/FER simulations + per-scenario image tests\n", program_name);
+    printf("  %s                       # run the 3 built-in BER/FER simulations + per-scenario image tests\n", program_name);
+    printf("  %s --alpha <value>       # ad hoc alpha (sigma2_est = alpha * sigma2_true) test vs baseline\n", program_name);
     printf("  %s --image input.pgm output.pgm [snr_db]\n", program_name);
     printf("\n");
     printf("Image mode supports binary grayscale PGM (P5) and, via Pillow, common formats (png/bmp/jpg).\n");
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--alpha") == 0) {
+        if (argc < 3) {
+            printf("Usage: %s --alpha <value>   (e.g. --alpha 2.0 for alpha>1, --alpha 0.5 for alpha<1)\n", argv[0]);
+            return 1;
+        }
+
+        double alpha = atof(argv[2]);
+        if (alpha <= 0.0) {
+            printf("Alpha must be a positive number.\n");
+            return 1;
+        }
+
+        seed_xorshift64();
+        ensure_result_dir();
+
+        char ber_file[256];
+        snprintf(ber_file, sizeof(ber_file), RESULT_DIR "/simulation_custom_alpha_%.2f.txt", alpha);
+        char baseline_file[256];
+        snprintf(baseline_file, sizeof(baseline_file), RESULT_DIR "/simulation_baseline_for_alpha_%.2f.txt", alpha);
+        char title_buf[128];
+        snprintf(title_buf, sizeof(title_buf), "[2/2] Custom Scenario A (alpha = %.2f)...", alpha);
+
+        SimulationConfig custom_baseline = {
+            .output_file = baseline_file,
+            .title = "[1/2] Baseline (for alpha comparison)...",
+            .llr_scale = 1.0,
+            .use_fixed_mask = false,
+            .fixed_mask_snr_db = 0.0
+        };
+
+        SimulationConfig custom_alpha = {
+            .output_file = ber_file,
+            .title = title_buf,
+            .llr_scale = alpha,
+            .use_fixed_mask = false,
+            .fixed_mask_snr_db = 0.0
+        };
+
+        double snr_points[NUM_SNR_POINTS];
+        double base_ber[NUM_SNR_POINTS], base_fer[NUM_SNR_POINTS];
+        double custom_ber[NUM_SNR_POINTS], custom_fer[NUM_SNR_POINTS];
+
+        run_simulation(&custom_baseline, NULL, snr_points, base_ber, base_fer);
+        run_simulation(&custom_alpha, NULL, NULL, custom_ber, custom_fer);
+
+        char summary_file[256];
+        snprintf(summary_file, sizeof(summary_file), RESULT_DIR "/comparison_alpha_%.2f.txt", alpha);
+        FILE *sfp = fopen(summary_file, "w");
+
+        printf("\n========================================\n");
+        printf(" alpha = %.2f vs Baseline\n", alpha);
+        printf("========================================\n");
+        printf("Eb/No(dB)  Base_BER      Custom_BER    Ratio(x)\n");
+        if (sfp) fprintf(sfp, "Eb/No(dB) Base_BER Custom_BER Ratio\n");
+
+        for (int i = 0; i < NUM_SNR_POINTS; i++) {
+            double ratio = (base_ber[i] > 0.0) ? (custom_ber[i] / base_ber[i]) : NAN;
+            printf("%6.2f     %.6e   %.6e   %8.2fx\n", snr_points[i], base_ber[i], custom_ber[i], ratio);
+            if (sfp) fprintf(sfp, "%.2f %.6e %.6e %.4f\n", snr_points[i], base_ber[i], custom_ber[i], ratio);
+        }
+
+        if (sfp) {
+            fclose(sfp);
+            printf("\nSaved to %s\n", summary_file);
+        }
+
+        char img_out[256];
+        snprintf(img_out, sizeof(img_out), RESULT_DIR "/lena_output_alpha_%.2f.png", alpha);
+        char img_label[64];
+        snprintf(img_label, sizeof(img_label), "Custom alpha=%.2f", alpha);
+
+        run_image_mode(img_label, DEFAULT_LENA_INPUT, img_out,
+                       DEFAULT_IMAGE_SNR_DB, false, 0.0, alpha);
+
+        return 0;
+    }
+
     if (argc >= 2 && strcmp(argv[1], "--image") == 0) {
         if (argc < 4) {
             print_usage(argv[0]);
@@ -810,9 +958,10 @@ int main(int argc, char **argv) {
     }
 
     seed_xorshift64();
+    ensure_result_dir();
 
     SimulationConfig baseline = {
-        .output_file = "simulation_baseline.txt",
+        .output_file = RESULT_DIR "/simulation_baseline.txt",
         .title = "[1/3] Running Baseline Scenario...",
         .llr_scale = 1.0,
         .use_fixed_mask = false,
@@ -820,7 +969,7 @@ int main(int argc, char **argv) {
     };
 
     SimulationConfig scenario_a = {
-        .output_file = "simulation_scenario_a.txt",
+        .output_file = RESULT_DIR "/simulation_scenario_a.txt",
         .title = "[2/3] Running Scenario A (LLR Mismatch, alpha = 0.5)...",
         .llr_scale = 0.5,
         .use_fixed_mask = false,
@@ -828,7 +977,7 @@ int main(int argc, char **argv) {
     };
 
     SimulationConfig scenario_b = {
-        .output_file = "simulation_scenario_b.txt",
+        .output_file = RESULT_DIR "/simulation_scenario_b.txt",
         .title = "[3/3] Running Scenario B (Design SNR Mismatch = 0.0 dB Fixed)...",
         .llr_scale = 1.0,
         .use_fixed_mask = true,
@@ -839,21 +988,31 @@ int main(int argc, char **argv) {
     double sigma2_design = compute_sigma2_from_ebno_db(scenario_b.fixed_mask_snr_db);
     construct_frozen_mask(sigma2_design, fixed_info_mask);
 
-    run_simulation(&baseline, NULL);
-    run_simulation(&scenario_a, NULL);
-    run_simulation(&scenario_b, fixed_info_mask);
+    double snr_points[NUM_SNR_POINTS];
+    double baseline_ber[NUM_SNR_POINTS], baseline_fer[NUM_SNR_POINTS];
+    double scenario_a_ber[NUM_SNR_POINTS], scenario_a_fer[NUM_SNR_POINTS];
+    double scenario_b_ber[NUM_SNR_POINTS], scenario_b_fer[NUM_SNR_POINTS];
+
+    run_simulation(&baseline, NULL, snr_points, baseline_ber, baseline_fer);
+    run_simulation(&scenario_a, NULL, NULL, scenario_a_ber, scenario_a_fer);
+    run_simulation(&scenario_b, fixed_info_mask, NULL, scenario_b_ber, scenario_b_fer);
+
+    print_scenario_comparison(snr_points, NUM_SNR_POINTS,
+                               baseline_ber, baseline_fer,
+                               scenario_a_ber, scenario_a_fer,
+                               scenario_b_ber, scenario_b_fer);
 
     printf("\n========================================\n");
     printf(" Image Transmission Test per Scenario (%s)\n", DEFAULT_LENA_INPUT);
     printf("========================================\n");
 
-    run_image_mode("Baseline", DEFAULT_LENA_INPUT, "lena_output_baseline.png",
+    run_image_mode("Baseline", DEFAULT_LENA_INPUT, RESULT_DIR "/lena_output_baseline.png",
                    DEFAULT_IMAGE_SNR_DB, baseline.use_fixed_mask, baseline.fixed_mask_snr_db, baseline.llr_scale);
 
-    run_image_mode("Scenario A (LLR Mismatch)", DEFAULT_LENA_INPUT, "lena_output_scenario_a.png",
+    run_image_mode("Scenario A (LLR Mismatch)", DEFAULT_LENA_INPUT, RESULT_DIR "/lena_output_scenario_a.png",
                    DEFAULT_IMAGE_SNR_DB, scenario_a.use_fixed_mask, scenario_a.fixed_mask_snr_db, scenario_a.llr_scale);
 
-    run_image_mode("Scenario B (Design SNR Mismatch)", DEFAULT_LENA_INPUT, "lena_output_scenario_b.png",
+    run_image_mode("Scenario B (Design SNR Mismatch)", DEFAULT_LENA_INPUT, RESULT_DIR "/lena_output_scenario_b.png",
                    DEFAULT_IMAGE_SNR_DB, scenario_b.use_fixed_mask, scenario_b.fixed_mask_snr_db, scenario_b.llr_scale);
 
     run_gnuplot_multiplot();
