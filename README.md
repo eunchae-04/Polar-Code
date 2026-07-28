@@ -86,12 +86,13 @@ gcc -std=c11 -O2 polar_code.c -lm -o polar_legacy.exe
 ./polar_legacy
 ```
 
-이미지 전송 모드도 사용할 수 있습니다. 이 모드는 입력 이미지를 자동으로 그레이스케일로 변환한 뒤 비트 스트림으로 바꿔 Polar Code로 전송하고, 복호화된 결과를 다시 이미지 파일로 저장합니다. `image.png` 같은 PNG 입력도 바로 사용할 수 있고, 출력도 `.png` 또는 `.pgm` 으로 저장할 수 있습니다.
 
 ```bash
 # 이미지 전송
-./polar_legacy --image image.png result/output.png 3.0
-```
+ gcc -std=c11 -O2 polar_code.c -lm -o polar_sim
+
+ ./polar_sim
+ ```
 
 `snr_db` 값은 선택 사항이며, 생략하면 기본값 `3.0 dB`를 사용합니다.
 
