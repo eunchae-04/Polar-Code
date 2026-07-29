@@ -29,11 +29,12 @@
 #define RESULT_DIR "result"
 
 // Scenario A alpha sweep 설정: 실제 채널을 고정하고 alpha(=LLR 스케일 오차 계수)를
-// 여러 값으로 훑으며 BER/이미지 결과를 관찰. 0<alpha<1(LLR 확대)과 alpha>1(LLR 축소)을
-// 모두 포함하도록 대표값을 선정.
+// 균일한 간격으로 훑으며 BER/이미지 결과를 관찰. alpha=1.0이 정확히 포함되도록
+// START/STEP을 잡음 (0.2, 0.6, 1.0, 1.4, 1.8, 2.2, 2.6, 3.0).
 #define ALPHA_SWEEP_TRUE_SNR_DB DEFAULT_IMAGE_SNR_DB
-static const double ALPHA_SWEEP_VALUES[] = {0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0, 2.5, 3.0};
-#define ALPHA_SWEEP_COUNT ((int)(sizeof(ALPHA_SWEEP_VALUES) / sizeof(ALPHA_SWEEP_VALUES[0])))
+#define ALPHA_SWEEP_START 0.2
+#define ALPHA_SWEEP_END   3.0
+#define ALPHA_SWEEP_STEP  0.4
 
 // Scenario B design-SNR sweep 설정: 실제 채널을 이 SNR로 고정하고,
 // 마스크 설계 SNR을 DESIGN_SNR_SWEEP_START~END까지 훑으며 BER 변화를 관찰.
@@ -728,6 +729,46 @@ static void run_image_mode(const char *scenario_label, const char *input_path, c
     free_gray_image(&output_image);
 }
 
+typedef struct {
+    double ber;
+    double fer;
+} BerFerResult;
+
+// N=1024,K=512 폴라코드 1 SNR 지점에 대한 BER/FER 몬테카를로 시뮬레이션 코어.
+// run_simulation / --sweep-a / --sweep-b가 모두 이 함수 하나를 공유한다.
+static BerFerResult run_monte_carlo(const int *info_mask, double sigma2_true, double sigma2_est) {
+    long total_errors = 0, total_bits = 0, total_frames = 0, total_frame_errors = 0;
+
+    while (total_errors < TARGET_ERRORS) {
+        int info_bits[K];
+        int u[N];
+        int x[N];
+        double rx[N];
+        double llr[N];
+        int u_hat[N];
+        int u_coded[N];
+        int mask_offset = 0;
+
+        generate_info_bits(info_bits);
+        build_u_from_mask(info_mask, info_bits, u);
+        polar_encode_recursive(u, x, N);
+        awgn_channel(x, sigma2_true, rx);
+        compute_llr(rx, sigma2_est, llr);
+        polar_sc_decode_recursive(llr, info_mask, u_hat, u_coded, N, &mask_offset);
+
+        long bit_errors = count_bit_errors(info_mask, u_hat, info_bits);
+        if (bit_errors > 0) total_frame_errors++;
+        total_errors += bit_errors;
+        total_bits += K;
+        total_frames++;
+    }
+
+    BerFerResult result;
+    result.ber = (double)total_errors / (double)total_bits;
+    result.fer = (double)total_frame_errors / (double)total_frames;
+    return result;
+}
+
 static void run_simulation(const SimulationConfig *cfg, const int *fixed_mask,
                             double *snr_out, double *ber_out, double *fer_out) {
     FILE *fp = fopen(cfg->output_file, "w");
@@ -751,38 +792,9 @@ static void run_simulation(const SimulationConfig *cfg, const int *fixed_mask,
             construct_frozen_mask(sigma2_est, info_mask);
         }
 
-        long total_errors = 0;
-        long total_bits = 0;
-        long total_frames = 0;
-        long total_frame_errors = 0;
-
-        while (total_errors < TARGET_ERRORS) {
-            int info_bits[K];
-            int u[N];
-            int x[N];
-            double rx[N];
-            double llr[N];
-            int u_hat[N];
-            int u_coded[N];
-            int mask_offset = 0;
-
-            generate_info_bits(info_bits);
-            build_u_from_mask(info_mask, info_bits, u);
-            polar_encode_recursive(u, x, N);
-            awgn_channel(x, sigma2_true, rx);
-            compute_llr(rx, sigma2_est, llr);
-            polar_sc_decode_recursive(llr, info_mask, u_hat, u_coded, N, &mask_offset);
-
-            long bit_errors = count_bit_errors(info_mask, u_hat, info_bits);
-
-            if (bit_errors > 0) total_frame_errors++;
-            total_errors += bit_errors;
-            total_bits += K;
-            total_frames++;
-        }
-
-        double final_ber = (double)total_errors / (double)total_bits;
-        double final_fer = (double)total_frame_errors / (double)total_frames;
+        BerFerResult result = run_monte_carlo(info_mask, sigma2_true, sigma2_est);
+        double final_ber = result.ber;
+        double final_fer = result.fer;
 
         printf("%.2f dB\t\t%.6e\t%.6e\n", snr_db, final_ber, final_fer);
         fprintf(fp, "%.2f %.6e %.6e\n", snr_db, final_ber, final_fer);
@@ -936,62 +948,32 @@ int main(int argc, char **argv) {
         int correct_mask[N];
         construct_frozen_mask(sigma2_true, correct_mask);
 
-        double alpha_ber[ALPHA_SWEEP_COUNT];
-        double alpha_fer[ALPHA_SWEEP_COUNT];
+        int num_points = (int)((ALPHA_SWEEP_END - ALPHA_SWEEP_START) / ALPHA_SWEEP_STEP + 1.5);
+        double *alpha_arr = (double *)malloc(sizeof(double) * (size_t)num_points);
+        double *alpha_ber = (double *)malloc(sizeof(double) * (size_t)num_points);
+        double *alpha_fer = (double *)malloc(sizeof(double) * (size_t)num_points);
+        int count = 0;
 
-        for (int ai = 0; ai < ALPHA_SWEEP_COUNT; ai++) {
-            double alpha = ALPHA_SWEEP_VALUES[ai];
-            double sigma2_est = sigma2_true * alpha;
+        for (double alpha = ALPHA_SWEEP_START; alpha <= ALPHA_SWEEP_END + 1e-9 && count < num_points; alpha += ALPHA_SWEEP_STEP) {
+            BerFerResult r = run_monte_carlo(correct_mask, sigma2_true, sigma2_true * alpha);
+            alpha_arr[count] = alpha;
+            alpha_ber[count] = r.ber;
+            alpha_fer[count] = r.fer;
 
-            long total_errors = 0;
-            long total_bits = 0;
-            long total_frames = 0;
-            long total_frame_errors = 0;
-
-            while (total_errors < TARGET_ERRORS) {
-                int info_bits[K];
-                int u[N];
-                int x[N];
-                double rx[N];
-                double llr[N];
-                int u_hat[N];
-                int u_coded[N];
-                int mask_offset = 0;
-
-                generate_info_bits(info_bits);
-                build_u_from_mask(correct_mask, info_bits, u);
-                polar_encode_recursive(u, x, N);
-                awgn_channel(x, sigma2_true, rx);
-                compute_llr(rx, sigma2_est, llr);
-                polar_sc_decode_recursive(llr, correct_mask, u_hat, u_coded, N, &mask_offset);
-
-                long bit_errors = count_bit_errors(correct_mask, u_hat, info_bits);
-                if (bit_errors > 0) total_frame_errors++;
-                total_errors += bit_errors;
-                total_bits += K;
-                total_frames++;
-            }
-
-            alpha_ber[ai] = (double)total_errors / (double)total_bits;
-            alpha_fer[ai] = (double)total_frame_errors / (double)total_frames;
-
-            printf("  [%d/%d] alpha = %.2f done (BER = %.6e)\n", ai + 1, ALPHA_SWEEP_COUNT, alpha, alpha_ber[ai]);
+            printf("  [%d/%d] alpha = %.2f done (BER = %.6e)\n", count + 1, num_points, alpha, r.ber);
 
             char img_out[256];
             snprintf(img_out, sizeof(img_out), RESULT_DIR "/lena_output_alpha_sweep_%.2f.png", alpha);
             char img_label[64];
             snprintf(img_label, sizeof(img_label), "Alpha Sweep alpha=%.2f", alpha);
-
             run_image_mode(img_label, DEFAULT_LENA_INPUT, img_out, true_snr, false, 0.0, alpha);
+
+            count++;
         }
 
-        // alpha=1.0 지점을 baseline 기준으로 찾아 배율(ratio) 계산
         double baseline_ber = -1.0;
-        for (int ai = 0; ai < ALPHA_SWEEP_COUNT; ai++) {
-            if (fabs(ALPHA_SWEEP_VALUES[ai] - 1.0) < 1e-9) {
-                baseline_ber = alpha_ber[ai];
-                break;
-            }
+        for (int i = 0; i < count; i++) {
+            if (fabs(alpha_arr[i] - 1.0) < ALPHA_SWEEP_STEP / 2.0) { baseline_ber = alpha_ber[i]; break; }
         }
 
         printf("\n========================================\n");
@@ -1004,20 +986,19 @@ int main(int argc, char **argv) {
         FILE *fp = fopen(sweep_file, "w");
         if (fp) fprintf(fp, "Alpha BER FER Ratio_to_alpha1\n");
 
-        for (int ai = 0; ai < ALPHA_SWEEP_COUNT; ai++) {
-            double alpha = ALPHA_SWEEP_VALUES[ai];
-            double ratio = (baseline_ber > 0.0) ? (alpha_ber[ai] / baseline_ber) : NAN;
-            const char *note = (fabs(alpha - 1.0) < 1e-9) ? "<- baseline (alpha=1)" : "";
+        for (int i = 0; i < count; i++) {
+            double ratio = (baseline_ber > 0.0) ? (alpha_ber[i] / baseline_ber) : NAN;
+            const char *note = (fabs(alpha_arr[i] - 1.0) < ALPHA_SWEEP_STEP / 2.0) ? "<- baseline (alpha=1)" : "";
 
-            printf("%5.2f    %.6e   %.6e   %13.2fx     %s\n",
-                   alpha, alpha_ber[ai], alpha_fer[ai], ratio, note);
-            if (fp) fprintf(fp, "%.2f %.6e %.6e %.4f\n", alpha, alpha_ber[ai], alpha_fer[ai], ratio);
+            printf("%5.2f    %.6e   %.6e   %13.2fx     %s\n", alpha_arr[i], alpha_ber[i], alpha_fer[i], ratio, note);
+            if (fp) fprintf(fp, "%.2f %.6e %.6e %.4f\n", alpha_arr[i], alpha_ber[i], alpha_fer[i], ratio);
         }
 
-        if (fp) {
-            fclose(fp);
-            printf("\nSaved to %s\n", sweep_file);
-        }
+        if (fp) { fclose(fp); printf("\nSaved to %s\n", sweep_file); }
+
+        free(alpha_arr);
+        free(alpha_ber);
+        free(alpha_fer);
 
         run_gnuplot_alpha_sweep(sweep_file, true_snr);
 
@@ -1041,47 +1022,23 @@ int main(int argc, char **argv) {
         double *design_fer_arr = (double *)malloc(sizeof(double) * (size_t)num_points);
         int count = 0;
 
-        for (double design_snr = DESIGN_SNR_SWEEP_START; design_snr <= DESIGN_SNR_SWEEP_END + 1e-9; design_snr += DESIGN_SNR_SWEEP_STEP) {
+        for (double design_snr = DESIGN_SNR_SWEEP_START; design_snr <= DESIGN_SNR_SWEEP_END + 1e-9 && count < num_points; design_snr += DESIGN_SNR_SWEEP_STEP) {
             int fixed_mask[N];
-            double sigma2_design = compute_sigma2_from_ebno_db(design_snr);
-            construct_frozen_mask(sigma2_design, fixed_mask);
+            construct_frozen_mask(compute_sigma2_from_ebno_db(design_snr), fixed_mask);
 
-            long total_errors = 0;
-            long total_bits = 0;
-            long total_frames = 0;
-            long total_frame_errors = 0;
+            BerFerResult r = run_monte_carlo(fixed_mask, sigma2_true, sigma2_true); // LLR 스케일은 정확, 마스크만 미스매치
+            design_snr_arr[count] = design_snr;
+            design_ber_arr[count] = r.ber;
+            design_fer_arr[count] = r.fer;
 
-            while (total_errors < TARGET_ERRORS) {
-                int info_bits[K];
-                int u[N];
-                int x[N];
-                double rx[N];
-                double llr[N];
-                int u_hat[N];
-                int u_coded[N];
-                int mask_offset = 0;
+            printf("  [%d/%d] design_snr = %.2f dB done (BER = %.6e)\n", count + 1, num_points, design_snr, r.ber);
 
-                generate_info_bits(info_bits);
-                build_u_from_mask(fixed_mask, info_bits, u);
-                polar_encode_recursive(u, x, N);
-                awgn_channel(x, sigma2_true, rx);
-                compute_llr(rx, sigma2_true, llr); // LLR 스케일은 정확 (마스크만 미스매치)
-                polar_sc_decode_recursive(llr, fixed_mask, u_hat, u_coded, N, &mask_offset);
+            char img_out[256];
+            snprintf(img_out, sizeof(img_out), RESULT_DIR "/lena_output_design_snr_sweep_%.2f.png", design_snr);
+            char img_label[64];
+            snprintf(img_label, sizeof(img_label), "Design SNR Sweep design=%.2fdB", design_snr);
+            run_image_mode(img_label, DEFAULT_LENA_INPUT, img_out, true_snr, true, design_snr, 1.0);
 
-                long bit_errors = count_bit_errors(fixed_mask, u_hat, info_bits);
-                if (bit_errors > 0) total_frame_errors++;
-                total_errors += bit_errors;
-                total_bits += K;
-                total_frames++;
-            }
-
-            if (count < num_points) {
-                design_snr_arr[count] = design_snr;
-                design_ber_arr[count] = (double)total_errors / (double)total_bits;
-                design_fer_arr[count] = (double)total_frame_errors / (double)total_frames;
-            }
-            printf("  [%d/%d] design_snr = %.2f dB done (BER = %.6e)\n",
-                   count + 1, num_points, design_snr, design_ber_arr[count]);
             count++;
         }
 
