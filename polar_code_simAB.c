@@ -852,12 +852,13 @@ static void run_gnuplot_alpha_sweep(const char *data_file, double true_snr) {
     FILE *gp = POPEN("gnuplot -persist", "w");
     if (gp == NULL) return;
 
-    fprintf(gp, "set terminal windows size 900, 500\n");
+    fprintf(gp, "set terminal windows size 1400, 700\n");
     fprintf(gp, "set title 'Scenario A: BER/FER vs alpha (true SNR = %.2f dB)'\n", true_snr);
     fprintf(gp, "set datafile separator whitespace\n");
     fprintf(gp, "set logscale x\n");
     fprintf(gp, "set logscale y\n");
     fprintf(gp, "set grid\n");
+    fprintf(gp, "set key outside right\n");
     fprintf(gp, "set xlabel 'alpha (sigma2_est / sigma2_true)'\n");
     fprintf(gp, "set ylabel 'Error Probability'\n");
     fprintf(gp, "set arrow from 1, graph 0 to 1, graph 1 nohead lc rgb 'gray' dt 2\n");
@@ -874,11 +875,12 @@ static void run_gnuplot_design_snr_sweep(const char *data_file, double true_snr)
     FILE *gp = POPEN("gnuplot -persist", "w");
     if (gp == NULL) return;
 
-    fprintf(gp, "set terminal windows size 900, 500\n");
+    fprintf(gp, "set terminal windows size 1400, 700\n");
     fprintf(gp, "set title 'Scenario B: BER/FER vs Design SNR (true channel = %.2f dB)'\n", true_snr);
     fprintf(gp, "set datafile separator whitespace\n");
     fprintf(gp, "set logscale y\n");
     fprintf(gp, "set grid\n");
+    fprintf(gp, "set key outside right\n");
     fprintf(gp, "set xlabel 'Design SNR (dB)'\n");
     fprintf(gp, "set ylabel 'Error Probability'\n");
     fprintf(gp, "set arrow from %.2f, graph 0 to %.2f, graph 1 nohead lc rgb 'gray' dt 2\n", true_snr, true_snr);
@@ -892,28 +894,39 @@ static void run_gnuplot_design_snr_sweep(const char *data_file, double true_snr)
 }
 static void run_gnuplot_multiplot(void) {
     FILE *gp = POPEN("gnuplot -persist", "w");
+    if (gp == NULL) return;
+
+    const char *baseline_file = RESULT_DIR "/simulation_baseline.txt";
+    const char *scenario_a_file = RESULT_DIR "/simulation_scenario_a.txt";
+    const char *scenario_b_file = RESULT_DIR "/simulation_scenario_b.txt";
+
+    fprintf(gp, "set terminal windows size 1700, 700\n");
     fprintf(gp, "set multiplot layout 1,3 title 'Polar Code Scenario Analyses (N=1024, K=512)' font ',13'\n");
     fprintf(gp, "set datafile separator whitespace\n");
     fprintf(gp, "set logscale y\n");
     fprintf(gp, "set grid\n");
     fprintf(gp, "unset yrange\n");
+    fprintf(gp, "set key outside right\n");
     fprintf(gp, "set xlabel 'Eb/No (dB)'\n");
     fprintf(gp, "set ylabel 'Error Probability'\n");
 
     fprintf(gp, "set title '1. Baseline (Perfect)'\n");
     fprintf(gp,
-            "plot 'simulation_baseline.txt' using 1:2 with linespoints lw 2 lc rgb 'purple' title 'BER', "
-            "'simulation_baseline.txt' using 1:3 with linespoints lw 2 lc rgb 'cyan' title 'FER'\n");
+            "plot '%s' using 1:2 with linespoints lw 2 lc rgb 'purple' title 'BER', "
+            "'%s' using 1:3 with linespoints lw 2 lc rgb 'cyan' title 'FER'\n",
+            baseline_file, baseline_file);
 
     fprintf(gp, "set title '2. Scenario A (LLR Error, a=0.5)'\n");
     fprintf(gp,
-            "plot 'simulation_scenario_a.txt' using 1:2 with linespoints lw 2 lc rgb 'red' title 'BER', "
-            "'simulation_scenario_a.txt' using 1:3 with linespoints lw 2 lc rgb 'orange' title 'FER'\n");
+            "plot '%s' using 1:2 with linespoints lw 2 lc rgb 'red' title 'BER', "
+            "'%s' using 1:3 with linespoints lw 2 lc rgb 'orange' title 'FER'\n",
+            scenario_a_file, scenario_a_file);
 
     fprintf(gp, "set title '3. Scenario B (Design SNR=0dB)'\n");
     fprintf(gp,
-            "plot 'simulation_scenario_b.txt' using 1:2 with linespoints lw 2 lc rgb 'blue' title 'BER', "
-            "'simulation_scenario_b.txt' using 1:3 with linespoints lw 2 lc rgb 'dark-green' title 'FER'\n");
+            "plot '%s' using 1:2 with linespoints lw 2 lc rgb 'blue' title 'BER', "
+            "'%s' using 1:3 with linespoints lw 2 lc rgb 'dark-green' title 'FER'\n",
+            scenario_b_file, scenario_b_file);
 
     fprintf(gp, "unset multiplot\n");
     PCLOSE(gp);

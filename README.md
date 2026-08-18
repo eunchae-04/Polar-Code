@@ -1,28 +1,28 @@
-# Polar Code (N=1024, K=512) Simulation Platform
-본 플랫폼은 가우시안 근사(Gaussian Approximation, GA) 기반의 부호 구축과 최적화된 Exact SPA 연속 제거(Successive Cancellation, SC) 복호화 알고리즘을 64비트 고속 난수 엔진 기반의 C언어 환경으로 구현한 고정밀 통신 시뮬레이터입니다.
+﻿# Polar Code Simulation Platform (N=1024, K=512)
+본 플랫폼은 Gaussian Approximation 기반의 부호 구축과 Exact SPA 기반 Successive Cancellation 복호 알고리즘을 64비트 난수 엔진을 활용한 C언어 환경에서 구현한 고정밀 통신 시뮬레이터이다.
 
-프로젝트는 목적에 따라 실행 파일 두 개로 나뉘어 있습니다.
+이 프로젝트는 목적에 따라 두 가지 실행 파일로 구성되어 있다.
 
-- **`polar_code.c`**: Baseline / Scenario A / Scenario B 3가지를 고정 조건으로 한 번에 비교하는 기본 실행 파일. BER/FER 그래프, 시나리오별 이미지 전송 테스트, 비교 요약표를 자동으로 만듭니다.
-- **`polar_code_simAB.c`**: Scenario A(α)와 Scenario B(Design SNR)를 각각 원하는 값/범위로 훑어보는 심화 분석 전용 실행 파일. 단발 테스트(`--alpha`)와 다중 값 스윕(`--sweep-a`, `--sweep-b`)을 지원합니다.
+- **`polar_code.c`**: Baseline, Scenario A, Scenario B를 같은 조건에서 동시에 비교하는 기본 실행 파일이다. BER/FER 그래프, 시나리오별 이미지 전송 실험, 비교 요약표를 자동으로 생성한다.
+- **`polar_code_simAB.c`**: Scenario A(α)와 Scenario B(Design SNR)를 원하는 값이나 범위로 탐색하는 심화 분석용 실행 파일이다. 단일 테스트(`--alpha`)와 다중 스윕(`--sweep-a`, `--sweep-b`)을 지원한다.
 
 
 
 ## 1. 핵심 이론 및 알고리즘 명세
 
 ### 1) 가우시안 근사 (Gaussian Approximation) 기반 부호 구축
-채널 분극화(Channel Polarization) 현상에 의해 분할되는 서브 채널들의 신뢰도를 정밀하게 추적하기 위해 밀도 진화(Density Evolution)의 가우시안 근사 함수 $\phi(x)$와 이진 탐색 기반의 역함수 $\phi^{-1}(y)$ 알고리즘을 수행합니다.
+채널 분극화(Channel Polarization)에 의해 분할되는 서브채널의 신뢰도를 정밀하게 추적하기 위해, 밀도 진화(Density Evolution)의 가우시안 근사 함수 $\phi(x)$와 이진 탐색 기반 역함수 $\phi^{-1}(y)$ 알고리즘을 적용한다.
 
 $$\phi(x) = \begin{cases} 1.0, & \text{if } x \le 0 \\ exp(-0.4527x^{0.86} + 0.0218), & \text{if } 0 < x \le 10 \\ \sqrt{\frac{\pi}{x}}\left(1 - \frac{10}{7x}\right)exp\left(-\frac{x}{4}\right), & \text{if } x > 10 \end{cases}$$
 
-- **Bit-Reversal Index 매핑**: 하향식(Bottom-Up) 나비 구조로 계산된 신뢰도 벡터 mu를 물리 트리 구조와 일치시키기 위해 비트 역전 변환을 거쳐 Natural Order로 재배치합니다.
-- **Frozen Mask 확정**: 정렬된 신뢰도 지수를 바탕으로 상위 K=512개의 채널을 정보 비트(Information) 영역으로 지정하고, 나머지 채널은 수렴 능력이 떨어지는 가상 채널로 판단하여 0(Frozen)으로 잠금 처리합니다.
+- **Bit-Reversal Index 매핑**: 하향식(Bottom-Up) 나비 구조로 계산된 신뢰도 벡터 mu를 물리 트리 구조와 맞추기 위해 비트 역전 변환을 거쳐 Natural Order로 재배치한다.
+- **Frozen Mask 확정**: 정렬된 신뢰도 지수를 바탕으로 상위 K=512개의 채널을 정보 비트(Information) 영역으로 지정하고, 나머지 채널은 수렴 능력이 낮은 가상 채널로 간주하여 0(Frozen)으로 잠근다.
 
 ### 2) Top-Down 재귀형 부호화기 (Natural Order Encoder)
-생성 행렬 $G_N$의 직접적인 대규모 행렬 곱 연산을 배제하고, 복호화 트리 구조와 완벽한 대칭성을 가지는 상향식 재귀 인코딩을 구현합니다. 상위 블록 입력 u에 대해 좌측 하부 브랜치는 $v = u_{left} \oplus u_{right}$ 커널 연산을 거치며, 최종 부호화된 코드 워드 x는 최하단 레이어에서 단순 연결(Plain Concat)되어 송신 심볼로 출력됩니다.
+생성 행렬 $G_N$의 직접적인 대규모 행렬 곱 연산을 피하고, 복호 트리 구조와 대칭성을 유지하는 상향식 재귀 인코딩을 구현한다. 상위 블록 입력 u에 대해 좌측 하부 브랜치는 $v = u_{left} \oplus u_{right}$ 커널 연산을 거치고, 최종 부호화된 코드워드 x는 최하단 레이어에서 단순 연결(Plain Concat)되어 송신 심볼로 출력된다.
 
 ### 3) Exact SPA 기반 연속 제거(SC) 복호화기
-하드웨어 구현 편의성을 위한 Min-Sum 근사 방식의 성능 열화를 극복하기 위해, 수학적 연속성을 완벽히 보장하는 야코비안 로그(Jacobian Logarithm) 정밀 보정 항이 결합된 **Exact SPA(Sum-Product Algorithm)** 연산 레이어를 구현했습니다.
+하드웨어 구현 편의성을 위해 Min-Sum 근사 방식의 성능 열화를 줄이기 위해, 수학적 연속성을 보장하는 Jacobian Logarithm 기반 보정 항이 결합된 **Exact SPA(Sum-Product Algorithm)** 연산 레이어를 구현한다.
 
 - **f-function (Left Path)**:
   $$LLR_{left} = \text{sign}(l_1) \cdot \text{sign}(l_2) \cdot \min(\vert{}l_1\vert{}, \vert{}l_2\vert{}) + \ln(1 + e^{-\vert{}l_1+l_2\vert{}}) - \ln(1 + e^{-\vert{}l_1-l_2\vert{}})$$
@@ -30,37 +30,37 @@ $$\phi(x) = \begin{cases} 1.0, & \text{if } x \le 0 \\ exp(-0.4527x^{0.86} + 0.0
   $$LLR_{right} = l_2 + (1 - 2 \cdot u_{coded\_left}) \cdot l_1$$
 
 ### 4) Xorshift64 난수 엔진 및 AWGN 채널
-기존 C 표준 라이브러리의 `rand()` 함수가 가진 주기적 한계치(32,767)와 의사 난수 뭉침 현상에 따른 시뮬레이션 데이터 왜곡을 방지하기 위해 **Xorshift64 무작위 수 생성기**를 전면 탑재했습니다.
-이를 박스-뮬러(Box-Muller) 변환과 결합하여, 높은 SNR 대역에서도 통계적 무결성과 독립성을 유지하는 정밀한 백색 가우시안 잡음(AWGN) 환경을 제공합니다.
+기존 C 표준 라이브러리의 `rand()` 함수는 주기적 한계와 의사난수 뭉침 문제를 가지므로, 이를 보완하기 위해 **Xorshift64 난수 생성기**를 적용한다.
+이 난수 생성기는 Box-Muller 변환과 결합되어, 높은 SNR 영역에서도 통계적 무결성과 독립성을 유지하는 정밀한 백색 가우시안 잡음(AWGN) 환경을 제공한다.
 
 
 
 ## 2. 연구용 비정상 시나리오 해석 기능
 
-본 시뮬레이터는 완벽한 채널 환경(Baseline) 외에도, 실제 수신기 칩셋 구현 시 마주할 수 있는 하드웨어 제약 및 오차 상황을 정밀 모델링하기 위해 2가지 학술적 분석 시나리오를 지원합니다.
+본 시뮬레이터는 완벽한 채널 환경(Baseline) 외에도, 실제 수신기 칩셋 구현에서 발생할 수 있는 하드웨어 제약과 오차 상황을 정밀하게 모델링하기 위해 두 가지 학술적 분석 시나리오를 지원한다.
 
 ### 1) 시나리오 A: 복호기 입력 LLR의 스케일링 오차 (LLR Scaling Error)
-실제 채널에 흐르는 진짜 잡음 분산($\sigma^2_{true}$)과 수신기가 추정 수식에서 믿고 있는 잡음 분산($\sigma^2_{est}$) 사이에 의도적인 오차 계수($\alpha$)를 개입시켜 초기 LLR 스케일을 왜곡하는 상황입니다.
+실제 채널의 잡음 분산($\sigma^2_{true}$)과 수신기가 추정하는 잡음 분산($\sigma^2_{est}$) 사이에 의도적인 오차 계수 $\alpha$를 삽입하여 초기 LLR 스케일을 왜곡하는 상황이다.
 
 $$\sigma^2_{est} = \alpha \times \sigma^2_{true}$$
 
-- **실측 결과 ($\alpha = 0.5$, `polar_code.c` 고정 조건)**: LLR 전체 크기를 2배로 확대시키는 방향의 오차입니다. 이 경우 Exact SPA의 비선형 보정 항($\ln(1+e^{-|l_1 \pm l_2|})$)은 입력 크기가 커질수록 값이 0에 수렴해, 복호기가 점점 **Min-Sum 근사**와 동일하게 동작하게 됩니다. Min-Sum 결합은 부호(sign) 판정이 양(+)의 균일 스케일링에 불변이므로, 이 방향의 미스매치는 이론적 우려와 달리 **BER을 오히려 개선**시키는 것으로 실측되었습니다. `scenario_comparison_summary.txt` 기준 SNR이 높아질수록 baseline 대비 오차율이 계속 낮아지며(0dB: 0.99배 → 3.0dB: 0.069배), 애초에 우려했던 "2.5~2.7dB 부근 bump(역전) 현상"은 관측되지 않았습니다.
-- **α>1(축소) 방향 검증 (`polar_code_simAB.c --alpha 2.0`)**: α=2.0(LLR이 절반으로 축소되는 방향)에서는 정반대로 이미지가 전면적으로 심하게 깨지는 것을 확인했습니다. LLR이 작아질수록 비선형 보정 항의 상대적 비중이 커지고 전체 신뢰도 자체가 낮게 추정되어, SC 복호기의 오류 전파(error propagation)가 훨씬 심해지기 때문입니다. 즉 **α<1(과대평가) 방향과 α>1(과소평가) 방향은 완전히 비대칭적**입니다.
-- **α 전 구간 스윕 (`polar_code_simAB.c --sweep-a`)**: α = 0.2~3.0(0.4 간격)을 한 번에 훑으며 BER/FER/이미지를 모두 생성해, 이 비대칭성을 α=1(baseline) 기준 좌우로 한눈에 비교할 수 있습니다.
+- **실측 결과 ($\alpha = 0.5$, `polar_code.c` 고정 조건)**: LLR 전체 크기를 2배로 확대하는 오차 방향에서는 Exact SPA의 비선형 보정 항이 입력 크기에 따라 점점 0에 수렴하여 복호기가 **Min-Sum 근사**와 유사하게 동작한다. Min-Sum 결합은 부호(sign) 판정이 동일한 양(+)의 비례 스케일링에 불변하므로, 이 방향으로의 오차는 오히려 **BER을 개선**시키는 경향을 보인다. `scenario_comparison_summary.txt`를 기준으로 SNR이 높아질수록 baseline 대비 오차율은 계속 감소하며(0dB: 0.99배 → 3.0dB: 0.069배), 우려되었던 "2.5~2.7dB 근처의 bump"는 관측되지 않았다.
+- **α>1(축소) 방향 검증 (`polar_code_simAB.c --alpha 2.0`)**: α=2.0인 경우 LLR이 절반으로 축소되면서 이미지가 전반적으로 심하게 깨지는 현상이 나타난다. LLR이 작아질수록 비선형 보정 항의 상대적 영향이 커지고 전체 신뢰도 자체가 낮게 추정되므로, SC 복호기의 오류 전파가 심해지기 때문이다. 즉 **α<1의 과대평가 방향과 α>1의 과소평가 방향은 비대칭적**이다.
+- **α 전 구간 스윕 (`polar_code_simAB.c --sweep-a`)**: α = 0.2~3.0 범위를 0.4 간격으로 훑으면 BER/FER/이미지 결과를 한 번에 생성할 수 있으며, α=1을 기준으로 비대칭성을 직관적으로 비교할 수 있다.
 
 ### 2) 시나리오 B: 부호 구축 시의 Design SNR 미스매치 (Design SNR Mismatch)
-채널 변동에 맞춰 프로즌 마스크를 동적으로 변경하지 못하고, 특정 설계 환경(Design SNR)에서 고정 생성된 단 하나의 마스크를 사용하여 채널 환경이 다른 대역까지 강제 복호하는 하드웨어 최적화 제약 상황입니다.
+채널 변동에 대응해 프로즌 마스크를 매번 재계산하지 못하고, 특정 설계 환경(Design SNR)에서 고정된 마스크를 사용하여 다른 채널 조건에서 복호를 수행하는 상황을 의미한다.
 
-- **실측 결과 (Design SNR = 0.0dB 고정, `polar_code.c` 고정 조건)**: Polar Code가 완전한 채널 의존적 부호(Channel-Dependent Code)임을 뒷받침하는 결과가 확인되었습니다. 0.0 dB 환경에 동결된 마스크는 실제 채널 SNR이 설계 SNR에서 멀어질수록(=신호가 좋아질수록) baseline 대비 성능 열화가 급격히 커집니다. `scenario_comparison_summary.txt` 기준 baseline 대비 오차율이 0dB에서 1.00배 수준이던 것이 3.0dB에서는 38.85배까지 벌어집니다.
-- **Design SNR 전 구간 스윕 (`polar_code_simAB.c --sweep-b`, 실제 채널 3.0dB 고정)**: 실제 채널을 3.0dB로 고정하고 design SNR을 -2.0~5.0dB(0.5dB 간격)로 훑은 결과, BER 곡선이 단조 증가가 아니라 **뚜렷한 3단계 패턴**으로 나타났습니다.
-  1. **Design SNR -2.0~0.0dB (붕괴 구간)**: BER ≈ 0.5, FER ≈ 1.0으로 사실상 랜덤 판정 수준까지 무너짐.
-  2. **Design SNR 0.0~0.5dB (급격한 전환 구간)**: BER이 수직에 가깝게 급락(개선).
-  3. **Design SNR 0.5~4.5dB (평탄 구간)**: BER이 0.003~0.006 수준에서 design SNR을 넓게 바꿔도 거의 변하지 않음.
-  4. **Design SNR ≈ 5.0dB (재상승)**: 실제 채널(3.0dB)보다 지나치게 낙관적인 마스크를 써서 경계 채널을 잘못 골라, 성능이 다시 소폭 나빠짐.
+- **실측 결과 (Design SNR = 0.0dB 고정, `polar_code.c` 고정 조건)**: Polar Code가 완전한 채널 의존형 부호임을 보여주는 결과로, 설계된 마스크를 실제 채널과 다르게 사용하면 성능 저하가 급격히 발생한다. `scenario_comparison_summary.txt` 기준으로 baseline 대비 오차율은 0dB에서 1.00배 수준이었으나, 3.0dB에서는 38.85배까지 증가한다.
+- **Design SNR 전 구간 스윕 (`polar_code_simAB.c --sweep-b`, 실제 채널 3.0dB 고정)**: 실제 채널을 3.0dB로 고정하고 design SNR을 -2.0~5.0dB 범위로 훑으면 BER 곡선이 단조 증가가 아니라 **뚜렷한 3단계 패턴**을 보인다.
+  1. **Design SNR -2.0~0.0dB (붕괴 구간)**: BER ≈ 0.5, FER ≈ 1.0으로 사실상 랜덤 판정 수준까지 무너진다.
+  2. **Design SNR 0.0~0.5dB (급격한 전환 구간)**: BER이 급격하게 하락하며 성능이 개선된다.
+  3. **Design SNR 0.5~4.5dB (평탄 구간)**: BER이 약 0.003~0.006 수준으로 유지되며, design SNR 변화에 크게 민감하지 않다.
+  4. **Design SNR ≈ 5.0dB (재상승)**: 실제 채널보다 지나치게 낙관적인 마스크를 사용해 경계 채널을 잘못 선택하고, 성능이 다시 약간 악화된다.
 
-  이 패턴의 원인은 `construct_frozen_mask()`의 초기값 `mu[0] = 2.0/sigma2`에 있습니다. **design SNR이 너무 낮으면 `mu[0]`이 작아 N=1024, 10단계 재귀만으로는 서브채널들의 극화(polarization)가 충분히 일어나지 못해** 어떤 채널이 진짜 좋은지 거의 구분이 안 되고, 그 결과 정보 비트 위치가 사실상 무작위로 뽑혀 BER이 0.5에 근접합니다. Design SNR이 일정 임계값(이 조건에서는 대략 0dB)을 넘어서면 극화가 충분히 강하게 일어나면서 채널 우선순위가 실제 채널의 우선순위와 크게 다르지 않게 안정화되어, 넓은 범위에서 낮고 평탄한 BER 구간(plateau)이 만들어집니다.
+  이 패턴의 원인은 `construct_frozen_mask()`의 초기값 `mu[0] = 2.0/sigma2`에 있다. **Design SNR이 너무 낮으면 `mu[0]`이 작아 N=1024, 10단계 재귀만으로는 서브채널의 극화가 충분히 일어나지 못하고**, 어떤 채널이 우수한지 거의 구분되지 않는다. 그 결과 정보 비트 위치가 사실상 무작위로 선택되어 BER이 0.5에 근접한다. 반대로 Design SNR이 일정 임계값(이 조건에서는 대략 0dB)을 넘으면 극화가 충분히 강해지고, 채널 우선순위가 실제 채널의 우선순위와 크게 다르지 않게 안정화되며, 넓은 범위에서 낮고 평탄한 BER 구간이 형성된다.
 
-  **즉 "design SNR이 실제 채널과 얼마나 정확히 일치하는가"보다 "design SNR이 극화를 일으키기에 충분히 높은가"가 훨씬 결정적인 임계 조건**입니다. 기존에 보고된 "38.85배 열화"는 정확히는 이 임계값보다 아래(0.0dB 부근)에서 설계된 마스크를 상대적으로 좋은 채널(3.0dB)에 강제로 쓴 극단적 케이스였음을, 스윕 데이터가 구체적으로 뒷받침합니다.
+  **즉 "design SNR이 실제 채널과 얼마나 정확히 일치하는가"보다 "design SNR이 극화를 일으키기에 충분히 높은가"가 훨씬 더 중요한 임계 조건**이다. 기존에 보고된 "38.85배 열화"는 이 임계값보다 낮은 영역에서 설계된 마스크를 상대적으로 좋은 채널(3.0dB)에 강제로 적용한 극단적인 경우로 볼 수 있으며, 스윕 데이터가 이를 뒷받침한다.
 
 
 
@@ -81,7 +81,50 @@ Polar-Code/
    └─ scenario_b_design_snr_sweep_true*.txt, lena_output_design_snr_sweep_*.png            (--sweep-b)
 ```
 
-## 4. 시뮬레이션 환경 구성
+
+## 4. 프로젝트 요약표
+
+### 4.1 파일별 역할
+
+| 파일 | 역할 | 주로 측정하는 것 |
+|---|---|---|
+| `polar_code.c` | 기본 비교용 메인 코드 | Baseline, Scenario A, Scenario B 비교 |
+| `polar_code_simAB.c` | 심화 분석용 코드 | $\alpha$ 스윕, Design SNR 스윕, 커스텀 실험 |
+| `polar_code_SCD_sim.c` | 참조용 기본 코드 | 단순 SC 기반 성능 검증 |
+
+### 4.2 실행 파일과 소스 매핑
+
+| 실행 파일 | 원본 코드 | 의미 |
+|---|---|---|
+| `polar_sim.exe` | `polar_code.c` | 기본 비교용 실행 파일 |
+| `polar_simAB.exe` | `polar_code_simAB.c` | A/B 시나리오 분석용 실행 파일 |
+| `polar_code_SCD_sim.exe` | `polar_code_SCD_sim.c` | 기본 동작 검증용 실행 파일 |
+
+> `.exe` 파일은 소스 파일을 컴파일한 결과일 뿐이며, 실제 성능 차이는 소스 코드의 시나리오 설정과 조건에 따라 결정된다.
+
+### 4.3 시나리오 요약
+
+| 시나리오 | 핵심 변수 | 설명 | 측정 항목 |
+|---|---|---|---|
+| Baseline | 없음 | 이상적 채널 조건의 기준 성능 | BER, FER |
+| Scenario A | $\alpha$ | LLR 스케일링 오차 | BER, FER, 이미지 복원 |
+| Scenario B | Design SNR | frozen mask 설계 불일치 | BER, FER, 민감도 |
+
+### 4.4 결과 파일 요약
+
+| 결과 파일 | 설명 |
+|---|---|
+| `simulation_baseline.txt` | Baseline BER/FER 결과 |
+| `simulation_scenario_a.txt` | Scenario A BER/FER 결과 |
+| `simulation_scenario_b.txt` | Scenario B BER/FER 결과 |
+| `scenario_comparison_summary.txt` | Baseline 대비 비율 비교 |
+| `*_alpha_*.txt` | $\alpha$ 실험 결과 |
+| `*_sweep_*.txt` | 스윕 실험 결과 |
+| `lena_output_*.png` | 이미지 복원 결과 |
+
+
+
+## 5. 시뮬레이션 환경 구성
 
 | 파라미터 | 설정 값 | 비고 |
 | :--- | :--- | :--- |
@@ -98,7 +141,7 @@ Polar-Code/
 
 
 
-## 5. 실행 방법 및 결과 파일 명세
+## 6. 실행 방법 및 결과 파일 명세
 
 ### 1) 기본 3-시나리오 비교: `polar_code.c`
 Baseline / Scenario A(α=0.5 고정) / Scenario B(Design SNR=0.0dB 고정)를 한 번에 비교합니다. 대규모 몬테카를로 BER/FER 연산과, 동일한 시나리오 조건으로 진행되는 이미지(그레이스케일) 전송 테스트를 순서대로 수행한 뒤, Gnuplot으로 세 시나리오를 3분할 가로형 시각화 패널(`multiplot`)로 자동 표시합니다.
