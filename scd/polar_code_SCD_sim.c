@@ -45,12 +45,40 @@
 #define PCLOSE pclose
 #endif
 
-// result/ 폴더가 없으면 생성. 이미 있으면(EEXIST) 조용히 통과.
-static void ensure_result_dir(void) {
-    if (MKDIR(RESULT_DIR) != 0 && errno != EEXIST) {
-        printf("Warning: failed to create '%s' directory (errno=%d). Output file may fail to save.\n",
-               RESULT_DIR, errno);
+static void ensure_dir_recursive(const char *path) {
+    char buffer[256];
+    size_t length = strlen(path);
+
+    if (length >= sizeof(buffer)) {
+        printf("Warning: output path too long: %s\n", path);
+        return;
     }
+
+    strcpy(buffer, path);
+
+    for (char *cursor = buffer + 1; *cursor; ++cursor) {
+        if (*cursor == '/' || *cursor == '\\') {
+            char saved = *cursor;
+            *cursor = '\0';
+            if (MKDIR(buffer) != 0 && errno != EEXIST) {
+                printf("Warning: failed to create '%s' directory (errno=%d). Output file may fail to save.\n",
+                       buffer, errno);
+                *cursor = saved;
+                return;
+            }
+            *cursor = saved;
+        }
+    }
+
+    if (MKDIR(buffer) != 0 && errno != EEXIST) {
+        printf("Warning: failed to create '%s' directory (errno=%d). Output file may fail to save.\n",
+               buffer, errno);
+    }
+}
+
+// result/scd 폴더가 없으면 생성. 이미 있으면(EEXIST) 조용히 통과.
+static void ensure_result_dir(void) {
+    ensure_dir_recursive(RESULT_DIR);
 }
 
 // =================================================================
@@ -170,7 +198,7 @@ static void polar_encode_recursive(const int *u, int *x, int n_len) {
     }
 
     int n2 = n_len / 2;
-    int v[n2];
+    int v[N / 2];
 
     for (int i = 0; i < n2; i++) {
         v[i] = u[i] ^ u[i + n2];
@@ -198,9 +226,9 @@ static void polar_sc_decode_recursive(const double *llr, const int *info_mask,
     }
 
     int n2 = n_len / 2;
-    double llr_left[n2], llr_right[n2];
-    int u_hat_left[n2], u_hat_right[n2];
-    int u_coded_left[n2], u_coded_right[n2];
+    double llr_left[N / 2], llr_right[N / 2];
+    int u_hat_left[N / 2], u_hat_right[N / 2];
+    int u_coded_left[N / 2], u_coded_right[N / 2];
 
     // f-function (Min-Sum)
     for (int i = 0; i < n2; i++) {
