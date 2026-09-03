@@ -208,7 +208,28 @@ gcc -std=c11 -O2 polar_code_simAB.c -lm -o polar_simAB.exe
 
 각 모드는 `result/` 아래에 표(txt) + 이미지(png/\_preview.png) + (스윕 모드는) gnuplot 그래프를 자동으로 생성합니다. `--sweep-a`/`--sweep-b`는 실행 중 진행 상황(`[3/8] alpha = 1.00 done...`)을 콘솔에 순차 출력한 뒤, 마지막에 baseline(또는 matched 지점) 대비 배율(`Ratio_to_alpha1`, `Ratio_to_matched`)이 포함된 최종 비교표를 보여줍니다.
 
-### 3) 데이터 출력 파일 명세
+### 3) 기준 SCD 검증: `polar_code_SCD_sim.c`
+
+SC/Min-Sum 계열의 기준 성능을 빠르게 확인하는 용도입니다. 별도의 이미지 스윕이나 시나리오 A/B 비교보다는, 정해진 조건에서 BER/FER 결과를 `scd/result/`에 저장하는 데 초점이 있습니다.
+
+Windows에서는 앞과 동일하게 MSYS2 UCRT64 환경 또는 PATH 설정이 필요합니다.
+
+```bash
+# 컴파일 (scd 폴더 안에서 실행한다고 가정)
+cd scd
+gcc -std=c11 -O2 polar_code_SCD_sim.c -lm -o polar_code_SCD_sim.exe
+
+# 실행
+./polar_code_SCD_sim.exe
+```
+
+실행 후 `scd/result/simulation_results.txt`가 생성되며, 결과는 `[Eb/No(dB) BER FER]` 형식으로 저장됩니다.
+
+### 4) 예약된 SCL 폴더
+
+현재 이 저장소에는 SCL 실행 파일이 아직 없지만, 앞으로 `scl/` 폴더에 `polar_code_SCL_sim.c`와 `result/`를 같은 방식으로 추가하면 됩니다.
+
+### 5) 데이터 출력 파일 명세
 
 - `core/result/simulation_baseline.txt` / `_scenario_a.txt` / `_scenario_b.txt`: `[Eb/No(dB) BER FER]` 형식의 시나리오별 성능 지표 (`core/polar_code.c`)
 - `core/result/scenario_comparison_summary.txt`: `[Eb/No(dB) Base_BER ScenA_BER A_over_Base ScenB_BER B_over_Base]` 형식의 baseline 대비 배율 비교표 (`core/polar_code.c`)
