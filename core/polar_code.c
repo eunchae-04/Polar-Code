@@ -77,7 +77,7 @@ static void ensure_result_dir(void) {
 #ifdef _WIN32
 #define POPEN _popen
 #define PCLOSE _pclose
-#define PYTHON_CMD "C:/msys64/ucrt64/bin/python.exe"
+#define PYTHON_CMD "C:/Users/user/anaconda3/python.exe"
 #else
 #define POPEN popen
 #define PCLOSE pclose
