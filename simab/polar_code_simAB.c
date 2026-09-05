@@ -53,46 +53,18 @@
 #endif
 #include <errno.h>
 
-static void ensure_dir_recursive(const char *path) {
-    char buffer[256];
-    size_t length = strlen(path);
-
-    if (length >= sizeof(buffer)) {
-        printf("Warning: output path too long: %s\n", path);
-        return;
-    }
-
-    strcpy(buffer, path);
-
-    for (char *cursor = buffer + 1; *cursor; ++cursor) {
-        if (*cursor == '/' || *cursor == '\\') {
-            char saved = *cursor;
-            *cursor = '\0';
-            if (MKDIR(buffer) != 0 && errno != EEXIST) {
-                printf("Warning: failed to create '%s' directory (errno=%d). Output files may fail to save.\n",
-                       buffer, errno);
-                *cursor = saved;
-                return;
-            }
-            *cursor = saved;
-        }
-    }
-
-    if (MKDIR(buffer) != 0 && errno != EEXIST) {
-        printf("Warning: failed to create '%s' directory (errno=%d). Output files may fail to save.\n",
-               buffer, errno);
-    }
-}
-
-// result/simab 폴더가 없으면 생성. 이미 있으면(EEXIST) 조용히 통과.
+// result/ 폴더가 없으면 생성. 이미 있으면(EEXIST) 조용히 통과.
 static void ensure_result_dir(void) {
-    ensure_dir_recursive(RESULT_DIR);
+    if (MKDIR(RESULT_DIR) != 0 && errno != EEXIST) {
+        printf("Warning: failed to create '%s' directory (errno=%d). Output files may fail to save.\n",
+               RESULT_DIR, errno);
+    }
 }
 
 #ifdef _WIN32
 #define POPEN _popen
 #define PCLOSE _pclose
-#define PYTHON_CMD "C:/msys64/ucrt64/bin/python.exe"
+#define PYTHON_CMD "C:/Users/user/anaconda3/python.exe"
 #else
 #define POPEN popen
 #define PCLOSE pclose

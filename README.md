@@ -164,7 +164,7 @@ cd core
 gcc -std=c11 -O2 polar_code.c -lm -o polar_sim.exe
 
 # 실행
-./polar_sim.exe
+.\polar_sim.exe
 ```
 
 인자 없이 실행하면 다음이 순서대로 진행됩니다:
@@ -177,7 +177,7 @@ gcc -std=c11 -O2 polar_code.c -lm -o polar_sim.exe
 특정 이미지를 수동으로 한 번만 테스트하고 싶다면:
 
 ```bash
-./polar_sim.exe --image input.png output.png [snr_db]
+.\polar_sim.exe --image input.png output.png [snr_db]
 ```
 
 ### 2) A/B 개별 심화 분석: `polar_code_simAB.c`
@@ -192,18 +192,18 @@ cd simab
 gcc -std=c11 -O2 polar_code_simAB.c -lm -o polar_simAB.exe
 
 # 단발성 alpha 테스트 (baseline 대비 SNR별 배율표 + 해당 alpha의 이미지 1장)
-./polar_simAB.exe --alpha 2.0
+.\polar_simAB.exe --alpha 2.0
 
 # Scenario A: alpha를 0.2~3.0(0.4 간격, 8개)으로 훑어 표 + 이미지 8장 + 그래프
-./polar_simAB.exe --sweep-a
-./polar_simAB.exe --sweep-a 2.0        # 실제 채널 SNR을 3.0dB가 아닌 다른 값으로 바꿔서 스윕
+.\polar_simAB.exe --sweep-a
+.\polar_simAB.exe --sweep-a 2.0        # 실제 채널 SNR을 3.0dB가 아닌 다른 값으로 바꿔서 스윕
 
 # Scenario B: design SNR을 -2.0~5.0dB(0.5dB 간격)으로 훑어 표 + 이미지 + 그래프
-./polar_simAB.exe --sweep-b
-./polar_simAB.exe --sweep-b 2.0        # 실제 채널 SNR을 다른 값으로 바꿔서 스윕
+.\polar_simAB.exe --sweep-b
+.\polar_simAB.exe --sweep-b 2.0        # 실제 채널 SNR을 다른 값으로 바꿔서 스윕
 
 # 수동 단발 이미지 테스트 (시나리오 조건 없이 baseline LLR로만 전송)
-./polar_simAB.exe --image input.png output.png [snr_db]
+.\polar_simAB.exe --image input.png output.png [snr_db]
 ```
 
 각 모드는 `result/` 아래에 표(txt) + 이미지(png/\_preview.png) + (스윕 모드는) gnuplot 그래프를 자동으로 생성합니다. `--sweep-a`/`--sweep-b`는 실행 중 진행 상황(`[3/8] alpha = 1.00 done...`)을 콘솔에 순차 출력한 뒤, 마지막에 baseline(또는 matched 지점) 대비 배율(`Ratio_to_alpha1`, `Ratio_to_matched`)이 포함된 최종 비교표를 보여줍니다.
@@ -215,12 +215,14 @@ SC/Min-Sum 계열의 기준 성능을 빠르게 확인하는 용도입니다. �
 Windows에서는 앞과 동일하게 MSYS2 UCRT64 환경 또는 PATH 설정이 필요합니다.
 
 ```bash
-# 컴파일 (scd 폴더 안에서 실행한다고 가정)
+# 1. scd 폴더로 이동
 cd scd
+
+# 2. C 코드 컴파일 → 실행 파일(.exe) 생성
 gcc -std=c11 -O2 polar_code_SCD_sim.c -lm -o polar_code_SCD_sim.exe
 
-# 실행
-./polar_code_SCD_sim.exe
+# 3. 실행
+.\polar_code_SCD_sim.exe
 ```
 
 실행 후 `scd/result/simulation_results.txt`가 생성되며, 결과는 `[Eb/No(dB) BER FER]` 형식으로 저장됩니다.
