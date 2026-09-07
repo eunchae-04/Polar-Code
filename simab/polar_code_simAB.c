@@ -1,3 +1,22 @@
+/*
+# 컴파일 (simab 폴더 안에서 실행한다고 가정)
+cd simab
+gcc -std=c11 -O2 polar_code_simAB.c -lm -o polar_simAB.exe
+
+# 단발성 alpha 테스트 (baseline 대비 SNR별 배율표 + 해당 alpha의 이미지 1장)
+.\polar_simAB.exe --alpha 2.0
+
+# Scenario A: alpha를 0.2~3.0(0.4 간격, 8개)으로 훑어 표 + 이미지 8장 + 그래프
+.\polar_simAB.exe --sweep-a
+.\polar_simAB.exe --sweep-a 2.0        # 실제 채널 SNR을 3.0dB가 아닌 다른 값으로 바꿔서 스윕
+
+# Scenario B: design SNR을 -2.0~5.0dB(0.5dB 간격)으로 훑어 표 + 이미지 + 그래프
+.\polar_simAB.exe --sweep-b
+.\polar_simAB.exe --sweep-b 2.0        # 실제 채널 SNR을 다른 값으로 바꿔서 스윕
+
+# 수동 단발 이미지 테스트 (시나리오 조건 없이 baseline LLR로만 전송)
+.\polar_simAB.exe --image input.png output.png [snr_db]
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -1,4 +1,9 @@
-#include <stdio.h>
+/*
+gcc -std=c11 -O2 polar_code.c -lm -o polar_sim.exe
+.\polar_sim.exe
+ */
+
+ #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
