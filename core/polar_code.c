@@ -23,7 +23,7 @@ gcc -std=c11 -O2 polar_code.c -lm -o polar_sim.exe
 #define EBNO_START 0.0
 #define EBNO_END   3.0
 #define EBNO_STEP  0.25
-#define TARGET_ERRORS 10000
+#define TARGET_ERRORS 1000
 
 // (EBNO_END - EBNO_START) / EBNO_STEP + 1 = (3.0 - 0.0) / 0.25 + 1 = 13
 // EBNO_START/END/STEP을 바꾸면 이 값도 함께 맞춰줘야 합니다.
